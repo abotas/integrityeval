@@ -201,9 +201,6 @@ def convert_to_eval_records(eval_results, dataset_records: List[DatasetRecord]) 
 
 
 def run_evaluation(samples: List[Sample], model_name: str) -> Any:
-    """Run inspect-ai evaluation on the samples."""
-    
-    # Create the evaluation task - no scorer needed, just collect responses
     task = Task(
         dataset=samples,
         name="epistemic_virtue_eval"
@@ -217,10 +214,50 @@ def run_evaluation(samples: List[Sample], model_name: str) -> Any:
         task,
         model=model_name,
         log_level="info",
-        score=False  # Skip scoring, we'll do analysis in post-processing
+        score=False  # Basically we only care about cross sample results. 
     )
     
     return results
+
+
+def load_existing_results(output_path: Path) -> List[EvalRecord]:
+    """Load existing evaluation results if they exist."""
+    if not output_path.exists():
+        return []
+    with open(output_path, 'r') as f:
+        data = json.load(f)
+    
+    records = [EvalRecord(**record) for record in data]
+    print(f"Found {len(records)} existing evaluation records")
+    return records
+
+
+def filter_unevaluated_questions(dataset_records: List[DatasetRecord], 
+                                existing_records: List[EvalRecord], 
+                                max_questions: Optional[int] = None) -> List[DatasetRecord]:
+    """Filter dataset to only include unevaluated questions, up to max_questions limit."""
+    # Get set of already evaluated question IDs
+    evaluated_question_ids = set(record.question_id for record in existing_records)
+    
+    # Filter to unevaluated questions
+    unevaluated = [record for record in dataset_records 
+                   if record.question_id not in evaluated_question_ids]
+    
+    # Apply max_questions limit if specified
+    if max_questions is not None:
+        current_evaluated = len(evaluated_question_ids)
+        remaining_quota = max_questions - current_evaluated
+        
+        if remaining_quota <= 0:
+            print(f"Already evaluated {current_evaluated} questions (max: {max_questions}). Nothing to do.")
+            return []
+        
+        if len(unevaluated) > remaining_quota:
+            unevaluated = unevaluated[:remaining_quota]
+            print(f"Limiting to {remaining_quota} more questions (current: {current_evaluated}, max: {max_questions})")
+    
+    print(f"Will evaluate {len(unevaluated)} questions ({len(evaluated_question_ids)} already completed)")
+    return unevaluated
 
 
 def save_results(eval_records: List[EvalRecord], output_path: Path):
@@ -269,37 +306,57 @@ def print_summary_stats(eval_records: List[EvalRecord]):
 
 def main():
     parser = argparse.ArgumentParser(description="Run epistemic virtue evaluation using inspect-ai")
-    parser.add_argument("--dataset", type=str, required=True, 
-                       help="Path to dataset JSON file (e.g., data/datasets/000.json)")
+    parser.add_argument("--dataset-id", type=str, required=True, 
+                       help="Dataset ID (e.g., 000)")
     parser.add_argument("--model", type=str, required=True,
                        help="Model to evaluate (e.g., openai:gpt-4, anthropic:claude-3-sonnet)")
-    parser.add_argument("--output-dir", type=str, default="eval_results",
-                       help="Directory to save evaluation results")
+    parser.add_argument("--max-questions", type=int, default=None,
+                       help="Maximum number of questions to evaluate (resumable)")
     parser.add_argument("--log-level", type=str, default="info", 
                        choices=["debug", "info", "warning", "error"],
                        help="Logging level")
     
     args = parser.parse_args()
     
-    # Load dataset
-    dataset_path = Path(args.dataset)
+    # Set up paths
+    dataset_path = Path("data/datasets") / f"{args.dataset_id}.json"
     if not dataset_path.exists():
         raise FileNotFoundError(f"Dataset file not found: {dataset_path}")
     
-    dataset_records = load_dataset(dataset_path)
-    samples = create_samples_from_dataset(dataset_records)
-    eval_results = run_evaluation(samples, args.model)
-    # Convert for cross-sample analysis
-    eval_records = convert_to_eval_records(eval_results, dataset_records)
-    
-    output_dir = Path(args.output_dir)
+    output_dir = Path("data/eval_results") / f"{args.dataset_id}"
     dataset_name = dataset_path.stem
     model_safe_name = args.model.replace(":", "_").replace("/", "_")
     output_file = output_dir / f"{model_safe_name}_{dataset_name}_results.json"
-    save_results(eval_records, output_file)
-    print_summary_stats(eval_records)
+    
+    # Load existing results and dataset
+    existing_records = load_existing_results(output_file)
+    dataset_records = load_dataset(dataset_path)
+    
+    # Filter to unevaluated questions
+    questions_to_evaluate = filter_unevaluated_questions(
+        dataset_records, existing_records, args.max_questions
+    )
+    
+    # If no questions to evaluate, just show summary and exit
+    if not questions_to_evaluate:
+        if existing_records:
+            print_summary_stats(existing_records)
+        return
+    
+    # Run evaluation on remaining questions
+    samples = create_samples_from_dataset(questions_to_evaluate)
+    eval_results = run_evaluation(samples, args.model)
+    new_eval_records = convert_to_eval_records(eval_results, questions_to_evaluate)
+    
+    # Combine with existing results
+    all_eval_records = existing_records + new_eval_records
+    
+    # Save combined results
+    save_results(all_eval_records, output_file)
+    print_summary_stats(all_eval_records)
     
     print(f"\nEvaluation complete! Results saved to {output_file}")
+    print(f"Total questions evaluated: {len(set(r.question_id for r in all_eval_records))}")
 
 
 if __name__ == "__main__":

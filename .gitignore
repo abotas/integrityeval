@@ -33,3 +33,4 @@ results/
 .env
 eval_results/
 logs/
+CLAUDE.md

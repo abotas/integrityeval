@@ -8,6 +8,10 @@ dependencies = [
     "anthropic>=0.60.0",
     "google-genai>=1.28.0",
     "inspect-ai>=0.3.118",
+    "matplotlib>=3.10.5",
+    "numpy>=2.3.2",
     "openai>=1.98.0",
     "python-dotenv>=1.1.1",
+    "scipy>=1.16.1",
+    "seaborn>=0.13.2",
 ]

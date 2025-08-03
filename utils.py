@@ -1,15 +1,11 @@
 import time
 from functools import wraps
 
-
 def retry(retries=1, delay=1.0):
-    """Generic retry decorator with configurable attempts."""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
             last_exception = None
-            
-            # Try to find a model in args to get model_id for logging
             model_id = None
             for arg in args:
                 if hasattr(arg, 'model_id'):
