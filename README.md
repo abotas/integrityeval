@@ -34,8 +34,9 @@ Run the eval on a model
 ```
 uv run eval.py \                                       
     --dataset-id 004 \
-    --model "google/gemini-2.5-flash" \
+    --model "google/gemini-2.5-pro" \
     --max-questions 4
 ```
 
 Run cross sample analysis on all models
+python analysis.py --run-id 004
