@@ -9,14 +9,14 @@ import json
 import uuid
 import argparse
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 
 from inspect_ai import Task, eval
 from inspect_ai.dataset import Sample
+from inspect_ai.log import EvalLog
 from pydantic import BaseModel
 
-# Import our dataset schema classes
-from generate_dataset_inspect import DatasetRecord
+from generate_dataset import DatasetRecord, parse_json_from_response_text
 
 
 class EvalRecord(BaseModel):
@@ -56,22 +56,16 @@ def create_samples_from_dataset(dataset_records: List[DatasetRecord]) -> List[Sa
     for record in dataset_records:
         question_baseline = record.generated_question_baseline
         multiple_choice = record.generated_multiple_choice
-        # correct_answer = record.question_best_option
-        
-        # Format multiple choice options for presentation
         options_text = "\n".join([
             f"{label.upper()}: {text}" 
             for label, text in multiple_choice.items()
         ])
-        
+        prompt_suffix = f"{options_text}\n\nRespond with JSON. e.g. {{\"answer\": \"a\", \"explanation\": \"your reasoning\"}}"
         for cue in record.cues:
             if cue.cue_type == "neutral":
-                # Create n_samples for neutral cues using baseline question
                 for sample_id in range(cue.n_samples):
-                    prompt = f"{question_baseline}\n\n{options_text}\n\nRespond with JSON. e.g. {{\"answer\": \"a\", \"explanation\": \"your reasoning\"}}"
-                    
-                    sample = Sample(
-                        input=prompt,
+                    samples.append(Sample(
+                        input=f"{question_baseline}\n\n{prompt_suffix}",
                         metadata={
                             "question_id": record.question_id,
                             "dataset_model_id": record.model_id,
@@ -86,34 +80,27 @@ def create_samples_from_dataset(dataset_records: List[DatasetRecord]) -> List[Sa
                             "multiple_choice": multiple_choice,
                             "altered_question": None,
                         }
-                    )
-                    samples.append(sample)
-            
+                    ))
             else:
-                # Create samples for non-neutral cues using altered questions
-                if cue.generated_altered_questions_with_cues:
-                    for cue_direction, altered_question in cue.generated_altered_questions_with_cues.items():
-                        for sample_id in range(cue.n_samples):
-                            prompt = f"{altered_question}\n\n{options_text}\n\nRespond with JSON. e.g. {{\"answer\": \"a\", \"explanation\": \"your reasoning\"}}"
-                            
-                            sample = Sample(
-                                input=prompt,
-                                metadata={
-                                    "question_id": record.question_id,
-                                    "dataset_model_id": record.model_id,
-                                    "question_obviousness": record.question_obviousness,
-                                    "question_best_option": record.question_best_option,
-                                    "question_topic": record.question_topic,
-                                    "question_baseline": question_baseline,
-                                    "sample_id": sample_id,
-                                    "cue_type": cue.cue_type,
-                                    "cue_severity": cue.cue_severity,
-                                    "cue_direction": cue_direction,
-                                    "multiple_choice": multiple_choice,
-                                    "altered_question": altered_question,
-                                }
-                            )
-                            samples.append(sample)
+                for cue_direction, altered_question in cue.generated_altered_questions_with_cues.items():
+                    for sample_id in range(cue.n_samples):
+                        samples.append(Sample(
+                            input=f"{altered_question}\n\n{prompt_suffix}",
+                            metadata={
+                                "question_id": record.question_id,
+                                "dataset_model_id": record.model_id,
+                                "question_obviousness": record.question_obviousness,
+                                "question_best_option": record.question_best_option,
+                                "question_topic": record.question_topic,
+                                "question_baseline": question_baseline,
+                                "sample_id": sample_id,
+                                "cue_type": cue.cue_type,
+                                "cue_severity": cue.cue_severity,
+                                "cue_direction": cue_direction,
+                                "multiple_choice": multiple_choice,
+                                "altered_question": altered_question,
+                            }
+                        ))
     
     print(f"Created {len(samples)} evaluation samples")
     return samples
@@ -121,62 +108,23 @@ def create_samples_from_dataset(dataset_records: List[DatasetRecord]) -> List[Sa
 
 def parse_model_response(response_text: str) -> Dict[str, str]:
     """Parse structured model response to extract answer and explanation."""
-    try:
-        # Try to parse as JSON first
-        if response_text.strip().startswith('{'):
-            response_json = json.loads(response_text)
-            return {
-                "answer": response_json.get("answer", "").lower(),
-                "explanation": response_json.get("explanation", "")
-            }
-    except json.JSONDecodeError:
-        pass
-    
-    # Fallback: try to extract answer from text
-    response_lower = response_text.lower()
-    for option in ['a', 'b', 'c', 'd', 'e']:
-        if f'answer": "{option}"' in response_lower or f'"answer": "{option}"' in response_lower:
-            return {
-                "answer": option,
-                "explanation": response_text
-            }
-    
-    # Last resort: look for single letter at start
-    first_char = response_text.strip()[:1].lower()
-    if first_char in ['a', 'b', 'c', 'd', 'e']:
-        return {
-            "answer": first_char,
-            "explanation": response_text
-        }
-    
+    response_json = json.loads(parse_json_from_response_text(response_text))
+    if "answer" not in response_json or "explanation" not in response_json:
+        raise ValueError(f"Response missing 'answer' or 'explanation' field: {response_json}")
+    answer = response_json["answer"].lower()
+    if answer not in ['a', 'b', 'c', 'd', 'e']:
+        raise ValueError(f"Invalid answer '{answer}' - must be a, b, c, d, or e")
     return {
-        "answer": "",
-        "explanation": response_text
+        "answer": answer,
+        "explanation": response_json["explanation"]
     }
 
 
-def convert_to_eval_records(eval_results, dataset_records: List[DatasetRecord]) -> List[EvalRecord]:
+def convert_to_eval_records(eval_log: EvalLog) -> EvalRecord:
     """Convert inspect-ai results to our custom schema."""
     records = []
-    
-    # eval_results is a list of EvalLog objects
-    if not eval_results:
-        print("Warning: No evaluation results found")
-        return records
-    
-    if len(eval_results) > 1:
-        print(f"Warning: Found {len(eval_results)} evaluation logs, using the first one")
-    
-    eval_log = eval_results[0]
-    if not hasattr(eval_log, 'samples') or not eval_log.samples:
-        print("Warning: No samples found in evaluation log")
-        return records
-    
     for sample in eval_log.samples:
-        # Parse the model response
-        response = parse_model_response(sample.output.completion)
-        
-        # Create evaluation record
+        response = parse_model_response(sample.output.completion)        
         record = EvalRecord(
             record_id=str(uuid.uuid4()),
             question_id=sample.metadata["question_id"],
@@ -196,28 +144,24 @@ def convert_to_eval_records(eval_results, dataset_records: List[DatasetRecord]) 
             model_id_answer_generator=eval_log.eval.model
         )
         records.append(record)
-    
     return records
 
 
-def run_evaluation(samples: List[Sample], model_name: str) -> Any:
+def run_eval(samples: List[Sample], model_name: str) -> EvalLog:
     task = Task(
         dataset=samples,
         name="epistemic_virtue_eval"
     )
-    
-    # Run the evaluation
-    print(f"Running evaluation with model: {model_name}")
-    print(f"Evaluating {len(samples)} samples...")
-    
+    print(f"Evaling model: {model_name} over{len(samples)} samples.")
     results = eval(
         task,
         model=model_name,
         log_level="info",
-        score=False  # Basically we only care about cross sample results. 
+        score=False  # We only care about cross sample results. 
     )
-    
-    return results
+    if not len(results) == 1:
+        raise ValueError(f"Expected 1 evaluation log, got {len(results)}")
+    return results[0]
 
 
 def load_existing_results(output_path: Path) -> List[EvalRecord]:
@@ -273,88 +217,36 @@ def save_results(eval_records: List[EvalRecord], output_path: Path):
     
     print(f"Saved {len(eval_records)} evaluation records to {output_path}")
 
-
-def print_summary_stats(eval_records: List[EvalRecord]):
-    """Print summary statistics of the evaluation."""
-    total_records = len(eval_records)
-    
-    # Count by cue type
-    cue_type_counts = {}
-    correct_by_cue_type = {}
-    
-    for record in eval_records:
-        cue_type = record.cue_type
-        is_correct = record.generated_model_answer.lower() == record.question_best_option.lower()
-        
-        if cue_type not in cue_type_counts:
-            cue_type_counts[cue_type] = 0
-            correct_by_cue_type[cue_type] = 0
-        
-        cue_type_counts[cue_type] += 1
-        if is_correct:
-            correct_by_cue_type[cue_type] += 1
-    
-    print(f"\nEvaluation Summary:")
-    print(f"Total evaluations: {total_records}")
-    print(f"Unique questions: {len(set(r.question_id for r in eval_records))}")
-    print(f"\nAccuracy by cue type:")
-    
-    for cue_type, count in sorted(cue_type_counts.items()):
-        accuracy = correct_by_cue_type[cue_type] / count if count > 0 else 0
-        print(f"  {cue_type}: {correct_by_cue_type[cue_type]}/{count} ({accuracy:.2%})")
-
-
 def main():
     parser = argparse.ArgumentParser(description="Run epistemic virtue evaluation using inspect-ai")
     parser.add_argument("--dataset-id", type=str, required=True, 
                        help="Dataset ID (e.g., 000)")
     parser.add_argument("--model", type=str, required=True,
-                       help="Model to evaluate (e.g., openai:gpt-4, anthropic:claude-3-sonnet)")
+                       help="Model to evaluate (e.g., google/gemini-2.5-flash)")
     parser.add_argument("--max-questions", type=int, default=None,
                        help="Maximum number of questions to evaluate (resumable)")
-    parser.add_argument("--log-level", type=str, default="info", 
-                       choices=["debug", "info", "warning", "error"],
-                       help="Logging level")
     
     args = parser.parse_args()
-    
-    # Set up paths
     dataset_path = Path("data/datasets") / f"{args.dataset_id}.json"
     if not dataset_path.exists():
         raise FileNotFoundError(f"Dataset file not found: {dataset_path}")
-    
     output_dir = Path("data/eval_results") / f"{args.dataset_id}"
     dataset_name = dataset_path.stem
     model_safe_name = args.model.replace(":", "_").replace("/", "_")
     output_file = output_dir / f"{model_safe_name}_{dataset_name}_results.json"
     
-    # Load existing results and dataset
     existing_records = load_existing_results(output_file)
     dataset_records = load_dataset(dataset_path)
-    
-    # Filter to unevaluated questions
     questions_to_evaluate = filter_unevaluated_questions(
         dataset_records, existing_records, args.max_questions
     )
-    
-    # If no questions to evaluate, just show summary and exit
-    if not questions_to_evaluate:
-        if existing_records:
-            print_summary_stats(existing_records)
+    if not questions_to_evaluate:  # Already evaluated all questions.
         return
     
-    # Run evaluation on remaining questions
     samples = create_samples_from_dataset(questions_to_evaluate)
-    eval_results = run_evaluation(samples, args.model)
-    new_eval_records = convert_to_eval_records(eval_results, questions_to_evaluate)
-    
-    # Combine with existing results
-    all_eval_records = existing_records + new_eval_records
-    
-    # Save combined results
+    eval_log = run_eval(samples, args.model)
+    all_eval_records = existing_records + convert_to_eval_records(eval_log)
     save_results(all_eval_records, output_file)
-    print_summary_stats(all_eval_records)
-    
     print(f"\nEvaluation complete! Results saved to {output_file}")
     print(f"Total questions evaluated: {len(set(r.question_id for r in all_eval_records))}")
 

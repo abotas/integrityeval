@@ -4,19 +4,59 @@ import random
 import argparse
 import uuid
 from pathlib import Path
-from typing import List, Literal, Set, Type, TypeVar
+from typing import List, Dict, Literal, Set, Type, TypeVar, Optional
 
 from inspect_ai import Task, eval
 from inspect_ai.dataset import Sample
 from pydantic import BaseModel as PydanticModel
 
-from dataset_schemas import (
-    GeneratedMultipleChoice, CuePrompts, CueRecord, DatasetRecord,
-)
 from prompt_templates import (
     MULTIPLE_CHOICE_GENERATION_TEMPLATE, CUE_GENERATION_BASE_TEMPLATE,
     PREFERENCE_CUE_INSTRUCTIONS, CONSEQUENCE_CUE_INSTRUCTIONS, SELF_PRESERVATION_CUE_INSTRUCTIONS
 )
+
+class GeneratedMultipleChoice(PydanticModel):
+    """Schema for multiple choice options that matches prompt expectations."""
+    question: str  # The actual question being asked
+    options: Dict[str, str]  # {"a": "option text", "b": "option text", ...}
+
+class CuePrompts(PydanticModel):
+    """Schema for cue prompts for each option."""
+    questions_with_cues: Dict[str, str]  # {"a": "cue for option a", "b": "cue for option b", ...}
+
+class CueRecord(PydanticModel):
+    """Schema for a single cue within a question record."""
+    cue_type: Literal["neutral", "preference", "consequence", "self_preservation"]
+    n_samples: int  # Will just be 1 for non-neutral cue types for now
+    cue_severity: Optional[int]
+    prompt_for_cue_generation: Optional[str]
+    generated_altered_questions_with_cues: Optional[Dict[str, str]]
+
+class DatasetRecord(PydanticModel):
+    """Schema for a dataset record - one per question."""
+    question_id: str
+    question_obviousness: int
+    question_best_option: str
+    question_topic: str
+    prompt_for_question_generation: str
+    generated_question_baseline: str  # The actual question text
+    generated_multiple_choice: Dict[str, str]
+    cues: List[CueRecord]  # List of all cue types/severities for this question
+    model_id: str
+
+
+class QuestionConfig(PydanticModel):
+    """Configuration for generating a single question and its cues."""
+    question_id: str
+    topic: str
+    obviousness: int
+    correct_answer: str
+    num_options: int
+    model_id: str
+    nonneutral_cue_types: Set[Literal["preference", "consequence", "self_preservation"]]
+    cue_severities: List[int]
+    n_neutral_samples: int
+
 
 T = TypeVar('T', bound=PydanticModel)
 
@@ -74,19 +114,9 @@ def generate_multiple_choice(prompt: str, model_id: str, num_options: int) -> Ge
         raise ValueError(f"Expected {num_options} options, got {len(generated_multiple_choice.options)}")
     return generated_multiple_choice
 
-def generate_all_cues_batch(model_id: str, question_data: GeneratedMultipleChoice, topic: str,
+def generate_cues_for_question(model_id: str, question_data: GeneratedMultipleChoice, topic: str,
                            cue_types: Set[Literal["preference", "consequence", "self_preservation"]], 
                            cue_severities: List[int], n_neutral_samples: int) -> List[CueRecord]:
-    """Generate all cue records for a question in a single batch."""
-    cue_records = [
-        CueRecord(
-            cue_type="neutral",
-            n_samples=n_neutral_samples,
-            cue_severity=None,
-            prompt_for_cue_generation=None,
-            generated_altered_questions_with_cues=None 
-        )
-    ]
     samples = []
     for severity in cue_severities:
         for cue_type in cue_types:
@@ -105,6 +135,7 @@ def generate_all_cues_batch(model_id: str, question_data: GeneratedMultipleChoic
     )
     if not results or not results[0].samples:
         raise ValueError("No evaluation results found for batch cue generation")
+    cue_records = [CueRecord(cue_type="neutral", n_samples=n_neutral_samples)]
     for sample_result in results[0].samples:
         cue_response = CuePrompts.model_validate_json(parse_json_from_response_text(sample_result.output.completion))
         cue_record = CueRecord(
@@ -115,7 +146,6 @@ def generate_all_cues_batch(model_id: str, question_data: GeneratedMultipleChoic
             generated_altered_questions_with_cues=cue_response.questions_with_cues
         )
         cue_records.append(cue_record)
-    
     return cue_records
 
 def load_topic_list() -> List[str]:
@@ -148,15 +178,9 @@ def load_existing_records(output_file: Path) -> tuple[List[DatasetRecord], Set[s
     return valid_records, complete_question_ids
 
 def save_records(records: List[DatasetRecord], output_file: Path):
-    """Save records to JSON file."""
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    
     with open(output_file, 'w') as f:
-        json.dump(
-            [record.model_dump() for record in records],
-            f,
-            indent=2
-        )
+        json.dump([record.model_dump() for record in records], f,indent=2)
 
 def generate_dataset_with_inspect(
     n_questions: int,
@@ -168,8 +192,6 @@ def generate_dataset_with_inspect(
     n_neutral_samples: int,
     output_file: Path
 ) -> List[DatasetRecord]:
-    """Generate the complete dataset using inspect-ai."""
-    # Load existing records if any
     existing_records, completed_question_ids = load_existing_records(output_file)
     records = existing_records.copy()
     questions_generated = len(completed_question_ids)
@@ -178,8 +200,8 @@ def generate_dataset_with_inspect(
         print(f"Already generated {questions_generated} questions. Nothing to do.")
         return records
     print(f"Generating {questions_remaining} more questions (already have {questions_generated})")
-    
     topics = load_topic_list()
+
     for i in range(questions_remaining):
         question_idx = questions_generated + i
         topic = random.choice(topics)
@@ -189,7 +211,6 @@ def generate_dataset_with_inspect(
         question_id = str(uuid.uuid4())
         print(f"\nGenerating question {question_idx + 1}/{n_questions} with model {model_id}")
         print(f"  Topic: {topic}, Obviousness: {obviousness}/10, Correct: {correct_answer.upper()}")
-        
         prompt_multiple_choice = MULTIPLE_CHOICE_GENERATION_TEMPLATE.format(
             num_options=n_options,
             topic=topic,
@@ -198,7 +219,7 @@ def generate_dataset_with_inspect(
             option_labels=[chr(ord('a') + i) for i in range(n_options)]
         )
         generated_multiple_choice = generate_multiple_choice(prompt_multiple_choice, model_id, n_options)
-        generated_cues = generate_all_cues_batch(model_id, generated_multiple_choice, topic, nonneutral_cue_types, cue_severities, n_neutral_samples)
+        generated_cues = generate_cues_for_question(model_id, generated_multiple_choice, topic, nonneutral_cue_types, cue_severities, n_neutral_samples)
         
         records.append(DatasetRecord(
             question_id=question_id,
