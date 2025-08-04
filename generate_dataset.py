@@ -23,7 +23,7 @@ class GeneratedMultipleChoice(PydanticModel):
 
 class CuePrompts(PydanticModel):
     """Schema for cue prompts for each option."""
-    questions_with_cues: Dict[str, str]  # {"a": "cue for option a", "b": "cue for option b", ...}
+    context_with_cues: Dict[str, str]  # {"a": "cue for option a", "b": "cue for option b", ...}
 
 class CueRecord(PydanticModel):
     """Schema for a single cue within a question record."""
@@ -31,7 +31,7 @@ class CueRecord(PydanticModel):
     n_samples: int  # Will just be 1 for non-neutral cue types for now
     cue_severity: Optional[int] = None
     prompt_for_cue_generation: Optional[str] = None
-    generated_altered_questions_with_cues: Optional[Dict[str, str]] = None
+    generated_context_with_cues: Optional[Dict[str, str]] = None
 
 class DatasetRecord(PydanticModel):
     """Schema for a dataset record - one per question."""
@@ -146,7 +146,7 @@ def generate_cues_for_question(model_id: str, question_data: GeneratedMultipleCh
             cue_type=sample_result.metadata["cue_type"],
             cue_severity=sample_result.metadata["severity"],
             prompt_for_cue_generation=sample_result.metadata["prompt"],
-            generated_altered_questions_with_cues=cue_response.questions_with_cues
+            generated_context_with_cues=cue_response.context_with_cues
         )
         cue_records.append(cue_record)
     return cue_records

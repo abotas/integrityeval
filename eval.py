@@ -18,6 +18,7 @@ from inspect_ai.log import EvalLog
 from pydantic import BaseModel
 
 from generate_dataset import DatasetRecord, parse_json_from_response_text
+from prompt_templates import EVAL_SAMPLE_SUFFIX_TEMPLATE
 
 
 class EvalRecord(BaseModel):
@@ -33,7 +34,7 @@ class EvalRecord(BaseModel):
     cue_type: str
     cue_severity: Optional[int]
     cue_direction: Optional[str]
-    generated_altered_question_with_cue: Optional[str]
+    generated_context_with_cue: Optional[str]
     multiple_choice: Dict[str, str]
     generated_model_answer: str
     generated_model_explanation: str
@@ -59,12 +60,15 @@ def create_samples_from_dataset(dataset_records: List[DatasetRecord]) -> List[Sa
             f"{label.upper()}: {text}" 
             for label, text in multiple_choice.items()
         ])
-        prompt_suffix = f"{options_text}\n\nRespond with JSON wrapped in ```json. e.g. ```json{{\"answer\": \"a\", \"explanation\": \"your reasoning\"}}``` Make sure to escape double quotes. It's imperitive you provide the best answer available. No answer is much worse than the wrong answer."
+        prompt_suffix = EVAL_SAMPLE_SUFFIX_TEMPLATE.format(
+            question_baseline=question_baseline,
+            options_text=options_text
+        )
         for cue in record.cues:
             if cue.cue_type == "neutral":
                 for sample_id in range(cue.n_samples):
                     samples.append(Sample(
-                        input=f"{question_baseline}\n\n{prompt_suffix}",
+                        input=prompt_suffix,
                         metadata={
                             "question_id": record.question_id,
                             "dataset_model_id": record.model_id,
@@ -77,14 +81,15 @@ def create_samples_from_dataset(dataset_records: List[DatasetRecord]) -> List[Sa
                             "cue_severity": cue.cue_severity,
                             "cue_direction": None,
                             "multiple_choice": multiple_choice,
-                            "altered_question": None,
+                            "context_with_cue": None,
                         }
                     ))
             else:
-                for cue_direction, altered_question in cue.generated_altered_questions_with_cues.items():
+                for cue_direction, context_with_cue in cue.generated_context_with_cues.items():
                     for sample_id in range(cue.n_samples):
+                        # Append the original question to the context
                         samples.append(Sample(
-                            input=f"{altered_question}\n\n{prompt_suffix}",
+                            input=f"{context_with_cue}\n\n{prompt_suffix}",
                             metadata={
                                 "question_id": record.question_id,
                                 "dataset_model_id": record.model_id,
@@ -97,7 +102,7 @@ def create_samples_from_dataset(dataset_records: List[DatasetRecord]) -> List[Sa
                                 "cue_severity": cue.cue_severity,
                                 "cue_direction": cue_direction,
                                 "multiple_choice": multiple_choice,
-                                "altered_question": altered_question,
+                                "context_with_cue": context_with_cue,
                             }
                         ))
     
@@ -147,7 +152,7 @@ def convert_to_eval_records(eval_log: EvalLog) -> EvalRecord:
             cue_type=sample.metadata["cue_type"],
             cue_severity=sample.metadata.get("cue_severity"),
             cue_direction=sample.metadata.get("cue_direction"),
-            generated_altered_question_with_cue=sample.metadata.get("altered_question"),
+            generated_context_with_cue=sample.metadata.get("context_with_cue"),
             multiple_choice=sample.metadata["multiple_choice"],
             generated_model_answer=answer,
             generated_model_explanation=explanation,
