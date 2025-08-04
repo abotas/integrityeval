@@ -8,18 +8,19 @@ This module analyzes the predictiveness of cue direction:
 - Predictiveness of cue direction by question obviousness by model
 """
 
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict
 from collections import defaultdict
 import numpy as np
 from scipy import stats
 from pydantic import BaseModel
 
-from experiment_runner_inspect import EvalRecord
+from eval import EvalRecord
 
 
 class AnalysisResults(BaseModel):
     """Results from predictiveness analysis with statistical significance."""
     model_id: str
+    refusal_count: int  # Number of refused responses
     baseline_consistency: Dict[str, float]  # question_id -> consistency score
     predictiveness_by_cue_type: Dict[str, Dict[str, float]]  # cue_type -> {predictiveness, n, p_value}
     predictiveness_by_cue_severity: Dict[int, Dict[str, float]]  # severity -> {predictiveness, n, p_value}
@@ -272,9 +273,11 @@ def analyze_model_results(records: List[EvalRecord], model_id: str) -> AnalysisR
     Analyze predictiveness of cue direction for a single model.
     """
     baseline_consistency = calculate_baseline_consistency(records)
+    refusal_count = sum(1 for r in records if r.generated_model_answer == "REFUSED")
     
     return AnalysisResults(
         model_id=model_id,
+        refusal_count=refusal_count,
         baseline_consistency=baseline_consistency,
         predictiveness_by_cue_type=calculate_predictiveness_by_cue_type(records),
         predictiveness_by_cue_severity=calculate_predictiveness_by_cue_severity(records),

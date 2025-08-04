@@ -1,3 +1,5 @@
+
+# Background / thinking
 High level idea:
 Generate multiple choice + prompts that point with different kinds of cues towards a particular answer. See how predictive the cue is of the model response. The more predictive the cue the more suggestible the model.
 Goals:
@@ -16,3 +18,24 @@ Predictiveness of cue direction by model and by cue type
 Predictiveness of cue direction by model and by cue severity
 Predictiveness of cue direction by baseline consistency by model
 Predictiveness of cue direction by question obviousness by model
+
+## Running an eval
+Generate a set of questions with a set of rephrased questions with embedded cues
+```
+uv run generate_dataset.py \                           
+    --n-questions 12 \
+    --n-options 3 \
+    --model-ids google/gemini-2.5-pro \
+    --n-neutral-samples 4 \
+    --dataset-id 004
+```
+
+Run the eval on a model
+```
+uv run eval.py \                                       
+    --dataset-id 004 \
+    --model "google/gemini-2.5-flash" \
+    --max-questions 4
+```
+
+Run cross sample analysis on all models

@@ -425,6 +425,7 @@ dependencies = [
     { name = "anthropic" },
     { name = "google-genai" },
     { name = "inspect-ai" },
+    { name = "json-repair" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "openai" },
@@ -438,6 +439,7 @@ requires-dist = [
     { name = "anthropic", specifier = ">=0.60.0" },
     { name = "google-genai", specifier = ">=1.28.0" },
     { name = "inspect-ai", specifier = ">=0.3.118" },
+    { name = "json-repair", specifier = ">=0.48.0" },
     { name = "matplotlib", specifier = ">=3.10.5" },
     { name = "numpy", specifier = ">=2.3.2" },
     { name = "openai", specifier = ">=1.98.0" },
@@ -811,6 +813,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/00/2a/e867e8531cf3e36b41201936b7fa7ba7b5702dbef42922193f05c8976cd6/jmespath-1.0.1.tar.gz", hash = "sha256:90261b206d6defd58fdd5e85f478bf633a2901798906be2ad389150c5c60edbe", size = 25843, upload-time = "2022-06-17T18:00:12.224Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/31/b4/b9b800c45527aadd64d5b442f9b932b00648617eb5d63d2c7a6587b7cafc/jmespath-1.0.1-py3-none-any.whl", hash = "sha256:02e2e4cc71b5bcab88332eebf907519190dd9e6e82107fa7f83b1003a6252980", size = 20256, upload-time = "2022-06-17T18:00:10.251Z" },
+]
+
+[[package]]
+name = "json-repair"
+version = "0.48.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/fc/b5/dd0e703abd6f69507c7ec0494c4d0bf5ecefaabaa454801bebcc8b80ff73/json_repair-0.48.0.tar.gz", hash = "sha256:030f826e6867dbc465be7163dfc23458c0776002c0878d239b29136cd2ae8f39", size = 34736, upload-time = "2025-07-25T12:04:51.575Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ba/e9/22315fd481ed9dc007646181b8c2ebf8b63cd512e59c750d03d50a9ed838/json_repair-0.48.0-py3-none-any.whl", hash = "sha256:c3eb34518c39a7a58d963dbbbda8cdb44e16d819169a85d6d1882f7d2fa24774", size = 26354, upload-time = "2025-07-25T12:04:50.245Z" },
 ]
 
 [[package]]

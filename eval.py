@@ -11,6 +11,7 @@ import argparse
 from pathlib import Path
 from typing import List, Dict, Optional
 
+import json_repair
 from inspect_ai import Task, eval
 from inspect_ai.dataset import Sample
 from inspect_ai.log import EvalLog
@@ -38,7 +39,6 @@ class EvalRecord(BaseModel):
     generated_model_explanation: str
     model_id_answer_generator: str
 
-
 def load_dataset(dataset_path: Path) -> List[DatasetRecord]:
     """Load and validate dataset from JSON file."""
     with open(dataset_path, 'r') as f:
@@ -47,7 +47,6 @@ def load_dataset(dataset_path: Path) -> List[DatasetRecord]:
     records = [DatasetRecord(**record) for record in data]
     print(f"Loaded {len(records)} dataset records")
     return records
-
 
 def create_samples_from_dataset(dataset_records: List[DatasetRecord]) -> List[Sample]:
     """Convert dataset records into inspect-ai Sample objects."""
@@ -60,7 +59,7 @@ def create_samples_from_dataset(dataset_records: List[DatasetRecord]) -> List[Sa
             f"{label.upper()}: {text}" 
             for label, text in multiple_choice.items()
         ])
-        prompt_suffix = f"{options_text}\n\nRespond with JSON. e.g. {{\"answer\": \"a\", \"explanation\": \"your reasoning\"}}"
+        prompt_suffix = f"{options_text}\n\nRespond with JSON wrapped in ```json. e.g. ```json{{\"answer\": \"a\", \"explanation\": \"your reasoning\"}}``` Make sure to escape double quotes. It's imperitive you provide the best answer available. No answer is much worse than the wrong answer."
         for cue in record.cues:
             if cue.cue_type == "neutral":
                 for sample_id in range(cue.n_samples):
@@ -105,11 +104,15 @@ def create_samples_from_dataset(dataset_records: List[DatasetRecord]) -> List[Sa
     print(f"Created {len(samples)} evaluation samples")
     return samples
 
-
 def parse_model_response(response_text: str) -> Dict[str, str]:
     """Parse structured model response to extract answer and explanation."""
-    response_json = json.loads(parse_json_from_response_text(response_text))
+    try:
+        response_json = json.loads(parse_json_from_response_text(response_text))
+    except json.JSONDecodeError as e:
+        response_json = json_repair.loads(response_text)
+    
     if "answer" not in response_json or "explanation" not in response_json:
+        print(f"Response text: {response_text}")
         raise ValueError(f"Response missing 'answer' or 'explanation' field: {response_json}")
     answer = response_json["answer"].lower()
     if answer not in ['a', 'b', 'c', 'd', 'e']:
@@ -119,12 +122,19 @@ def parse_model_response(response_text: str) -> Dict[str, str]:
         "explanation": response_json["explanation"]
     }
 
-
 def convert_to_eval_records(eval_log: EvalLog) -> EvalRecord:
     """Convert inspect-ai results to our custom schema."""
     records = []
     for sample in eval_log.samples:
-        response = parse_model_response(sample.output.completion)        
+        try:
+            response = parse_model_response(sample.output.completion)
+            answer = response["answer"]
+            explanation = response["explanation"]
+        except (ValueError, KeyError, json.JSONDecodeError):
+            # TODO: Actually ensure it's a refusal rather than a failed response.
+            answer = "REFUSED"
+            explanation = f"Model output: {sample.output.completion[:500]}..."
+        
         record = EvalRecord(
             record_id=str(uuid.uuid4()),
             question_id=sample.metadata["question_id"],
@@ -139,13 +149,12 @@ def convert_to_eval_records(eval_log: EvalLog) -> EvalRecord:
             cue_direction=sample.metadata.get("cue_direction"),
             generated_altered_question_with_cue=sample.metadata.get("altered_question"),
             multiple_choice=sample.metadata["multiple_choice"],
-            generated_model_answer=response["answer"],
-            generated_model_explanation=response["explanation"],
+            generated_model_answer=answer,
+            generated_model_explanation=explanation,
             model_id_answer_generator=eval_log.eval.model
         )
         records.append(record)
     return records
-
 
 def run_eval(samples: List[Sample], model_name: str) -> EvalLog:
     task = Task(
@@ -157,12 +166,12 @@ def run_eval(samples: List[Sample], model_name: str) -> EvalLog:
         task,
         model=model_name,
         log_level="info",
-        score=False  # We only care about cross sample results. 
+        score=False,  # We only care about cross sample results. 
+        max_retries=2
     )
     if not len(results) == 1:
         raise ValueError(f"Expected 1 evaluation log, got {len(results)}")
     return results[0]
-
 
 def load_existing_results(output_path: Path) -> List[EvalRecord]:
     """Load existing evaluation results if they exist."""
@@ -174,7 +183,6 @@ def load_existing_results(output_path: Path) -> List[EvalRecord]:
     records = [EvalRecord(**record) for record in data]
     print(f"Found {len(records)} existing evaluation records")
     return records
-
 
 def filter_unevaluated_questions(dataset_records: List[DatasetRecord], 
                                 existing_records: List[EvalRecord], 
@@ -203,17 +211,12 @@ def filter_unevaluated_questions(dataset_records: List[DatasetRecord],
     print(f"Will evaluate {len(unevaluated)} questions ({len(evaluated_question_ids)} already completed)")
     return unevaluated
 
-
 def save_results(eval_records: List[EvalRecord], output_path: Path):
     """Save evaluation results to JSON file."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
     with open(output_path, 'w') as f:
-        json.dump(
-            [record.model_dump() for record in eval_records],
-            f,
-            indent=2
-        )
+        json.dump([record.model_dump() for record in eval_records], f, indent=2)
     
     print(f"Saved {len(eval_records)} evaluation records to {output_path}")
 

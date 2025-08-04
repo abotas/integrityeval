@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
-from experiment_runner_inspect import EvalRecord
+from eval import EvalRecord
 from analysis_utils import analyze_model_results, AnalysisResults
 
 # Constants
@@ -295,6 +295,7 @@ def generate_html_report(run_id: str, all_results: Dict[str, AnalysisResults],
             <h1>Predictiveness of Cue Direction Analysis</h1>
             <p><strong>Run ID:</strong> {run_id}</p>
             <p><strong>Models analyzed:</strong> {', '.join(all_results.keys())}</p>
+            <p><strong>Refusals:</strong> {', '.join([f"{model}: {results.refusal_count}" for model, results in all_results.items()])}</p>
             
             <div class="metric-section">
                 <h2>1. Predictiveness by Cue Type</h2>
@@ -416,7 +417,7 @@ def main():
         f.write(html_content)
     
     print(f"\nAnalysis complete!")
-    print(f"Report saved to: {report_path}")
+    print(f"Report saved to: {report_path.absolute()}. Open in your browser.")
 
 
 if __name__ == "__main__":

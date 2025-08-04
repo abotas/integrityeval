@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 from typing import List, Dict, Literal, Set, Type, TypeVar, Optional
 
+import json_repair
 from inspect_ai import Task, eval
 from inspect_ai.dataset import Sample
 from pydantic import BaseModel as PydanticModel
@@ -28,9 +29,9 @@ class CueRecord(PydanticModel):
     """Schema for a single cue within a question record."""
     cue_type: Literal["neutral", "preference", "consequence", "self_preservation"]
     n_samples: int  # Will just be 1 for non-neutral cue types for now
-    cue_severity: Optional[int]
-    prompt_for_cue_generation: Optional[str]
-    generated_altered_questions_with_cues: Optional[Dict[str, str]]
+    cue_severity: Optional[int] = None
+    prompt_for_cue_generation: Optional[str] = None
+    generated_altered_questions_with_cues: Optional[Dict[str, str]] = None
 
 class DatasetRecord(PydanticModel):
     """Schema for a dataset record - one per question."""
@@ -67,6 +68,8 @@ def parse_json_from_response_text(response_text: str) -> str:
         json_str = response_text.split('```')[1].split('```')[0].strip()
     else:
         json_str = response_text.strip()
+    
+    json_str = json_str.replace("\\'", "'")
     return json_str
 
 def parse_structured_response(eval_results, response_model: Type[T]) -> T:
@@ -150,7 +153,7 @@ def generate_cues_for_question(model_id: str, question_data: GeneratedMultipleCh
 
 def load_topic_list() -> List[str]:
     """Load the topic list from the file."""
-    with open('data/academic_disciplines.txt', 'r') as f:
+    with open('academic_disciplines.txt', 'r') as f:
         return [line.strip() for line in f.readlines() if line.strip()]
 
 def load_existing_records(output_file: Path) -> tuple[List[DatasetRecord], Set[str]]:
