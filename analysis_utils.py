@@ -87,7 +87,7 @@ def calculate_predictiveness_by_cue_type(records: List[EvalRecord]) -> Dict[str,
         return {}
     
     # Expected rate under null hypothesis (random chance)
-    random_chance = 1.0 / n_options
+    random = 1.0 / n_options
     
     # Group by cue type
     cue_responses = defaultdict(lambda: {"followed": 0, "total": 0})
@@ -109,12 +109,12 @@ def calculate_predictiveness_by_cue_type(records: List[EvalRecord]) -> Dict[str,
         rate = data["followed"] / data["total"]
         
         # Binomial test vs random chance
-        p_value = stats.binomtest(data["followed"], data["total"], random_chance, alternative='two-sided').pvalue
+        p_value = stats.binomtest(data["followed"], data["total"], random, alternative='two-sided').pvalue
         
         results[cue_type] = {
             "predictiveness": rate,
             "n": data["total"],
-            "random_chance": random_chance,
+            "random": random,
             "p_value": p_value
         }
     
@@ -135,7 +135,7 @@ def calculate_predictiveness_by_cue_severity(records: List[EvalRecord]) -> Dict[
     if n_options == 0:
         return {}
     
-    random_chance = 1.0 / n_options
+    random = 1.0 / n_options
     
     severity_responses = defaultdict(lambda: {"followed": 0, "total": 0})
     
@@ -153,12 +153,12 @@ def calculate_predictiveness_by_cue_severity(records: List[EvalRecord]) -> Dict[
         rate = data["followed"] / data["total"]
         
         # Binomial test vs random chance
-        p_value = stats.binomtest(data["followed"], data["total"], random_chance, alternative='two-sided').pvalue
+        p_value = stats.binomtest(data["followed"], data["total"], random, alternative='two-sided').pvalue
         
         results[severity] = {
             "predictiveness": rate,
             "n": data["total"],
-            "random_chance": random_chance,
+            "random": random,
             "p_value": p_value
         }
     
@@ -189,7 +189,7 @@ def calculate_predictiveness_by_baseline_consistency(records: List[EvalRecord]) 
     if n_options == 0:
         return {}
     
-    random_chance = 1.0 / n_options
+    random = 1.0 / n_options
     
     # Calculate cue effectiveness per consistency level
     results = {}
@@ -210,13 +210,13 @@ def calculate_predictiveness_by_baseline_consistency(records: List[EvalRecord]) 
         rate = followed / total
         
         # Statistical test vs random chance
-        p_value = stats.binomtest(followed, total, random_chance, alternative='two-sided').pvalue
+        p_value = stats.binomtest(followed, total, random, alternative='two-sided').pvalue
         
         results[consistency_score] = {
             "predictiveness": rate,
             "n": total,
             "n_questions": len(question_ids),
-            "random_chance": random_chance,
+            "random": random,
             "p_value": p_value
         }
     
@@ -237,7 +237,7 @@ def calculate_predictiveness_by_question_obviousness(records: List[EvalRecord]) 
     if n_options == 0:
         return {}
     
-    random_chance = 1.0 / n_options
+    random = 1.0 / n_options
     
     obviousness_responses = defaultdict(lambda: {"followed": 0, "total": 0})
     
@@ -256,12 +256,12 @@ def calculate_predictiveness_by_question_obviousness(records: List[EvalRecord]) 
         rate = data["followed"] / data["total"]
         
         # Statistical test vs random chance
-        p_value = stats.binomtest(data["followed"], data["total"], random_chance, alternative='two-sided').pvalue
+        p_value = stats.binomtest(data["followed"], data["total"], random, alternative='two-sided').pvalue
         
         results[obviousness] = {
             "predictiveness": rate,
             "n": data["total"],
-            "random_chance": random_chance,
+            "random": random,
             "p_value": p_value
         }
     

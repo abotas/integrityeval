@@ -72,11 +72,11 @@ def load_run_results(run_dir: Path) -> Dict[str, List[EvalRecord]]:
 # VISUALIZATION: Plot generation
 # ============================================================================
 
-def _get_random_chance(all_results: Dict[str, AnalysisResults]) -> float:
-    """Get random chance value from first available result."""
+def _get_random(all_results: Dict[str, AnalysisResults]) -> float:
+    """Get random value from first available result."""
     results = next(iter(all_results.values()))
     data = next(iter(results.predictiveness_by_cue_type.values()))
-    return data['random_chance']
+    return data['random']
 
 def _get_significance_marker(p_value: float) -> str:
     """Return statistical significance marker."""
@@ -98,16 +98,16 @@ def generate_predictiveness_plots(all_results: Dict[str, AnalysisResults]) -> Di
     sorted_models = sort_model_list(list(all_results.keys()))
     colors = sns.color_palette("husl", len(sorted_models))
     
-    random_chance = _get_random_chance(all_results)
-    plots['cue_type'] = _plot_cue_type(sorted_models, all_results, colors, random_chance)
-    plots['severity'] = _plot_severity(sorted_models, all_results, colors, random_chance)
-    plots['consistency'] = _plot_consistency(sorted_models, all_results, colors, random_chance)
-    plots['obviousness'] = _plot_obviousness(sorted_models, all_results, colors, random_chance)
+    random = _get_random(all_results)
+    plots['cue_type'] = _plot_cue_type(sorted_models, all_results, colors, random)
+    plots['severity'] = _plot_severity(sorted_models, all_results, colors, random)
+    plots['consistency'] = _plot_consistency(sorted_models, all_results, colors, random)
+    plots['obviousness'] = _plot_obviousness(sorted_models, all_results, colors, random)
     return plots
 
 
 def _plot_cue_type(sorted_models: List[str], all_results: Dict[str, AnalysisResults], 
-                   colors: List, random_chance: float) -> str:
+                   colors: List, random: float) -> str:
     """Create bar plot for predictiveness by cue type."""
     fig, ax = plt.subplots(figsize=FIGURE_SIZE)
     
@@ -137,8 +137,8 @@ def _plot_cue_type(sorted_models: List[str], all_results: Dict[str, AnalysisResu
         
         x_pos += 0.5
     
-    ax.axhline(y=random_chance, color='red', linestyle='--', alpha=0.7, 
-              label=f'Random chance ({random_chance:.2f})')
+    ax.axhline(y=random, color='red', linestyle='--', alpha=0.7, 
+              label=f'Random ({random:.2f})')
     
     ax.set_xticks(x_positions)
     ax.set_xticklabels(x_labels, rotation=45, ha='right')
@@ -151,7 +151,7 @@ def _plot_cue_type(sorted_models: List[str], all_results: Dict[str, AnalysisResu
 
 
 def _plot_severity(sorted_models: List[str], all_results: Dict[str, AnalysisResults], 
-                   colors: List, random_chance: float) -> str:
+                   colors: List, random: float) -> str:
     """Create line plot for predictiveness by cue severity."""
     fig, ax = plt.subplots(figsize=FIGURE_SIZE)
     
@@ -166,8 +166,8 @@ def _plot_severity(sorted_models: List[str], all_results: Dict[str, AnalysisResu
         ax.plot(severities, predictiveness, 'o-', color=colors[i], 
                label=model_name, markersize=8, linewidth=2)
     
-    ax.axhline(y=random_chance, color='red', linestyle='--', alpha=0.7, 
-              label=f'Random chance ({random_chance:.2f})')
+    ax.axhline(y=random, color='red', linestyle='--', alpha=0.7, 
+              label=f'Random ({random:.2f})')
     
     ax.set_xlabel('Cue Severity')
     ax.set_ylabel('Predictiveness of Cue Direction')
@@ -182,7 +182,7 @@ def _plot_severity(sorted_models: List[str], all_results: Dict[str, AnalysisResu
 
 
 def _plot_consistency(sorted_models: List[str], all_results: Dict[str, AnalysisResults], 
-                      colors: List, random_chance: float) -> str:
+                      colors: List, random: float) -> str:
     """Create scatter plot for predictiveness by baseline consistency."""
     fig, ax = plt.subplots(figsize=FIGURE_SIZE)
     
@@ -203,8 +203,8 @@ def _plot_consistency(sorted_models: List[str], all_results: Dict[str, AnalysisR
         x_trend = np.linspace(0, 1, 100)
         ax.plot(x_trend, p(x_trend), color=colors[i], alpha=0.5, linestyle='--')
     
-    ax.axhline(y=random_chance, color='red', linestyle='--', alpha=0.7, 
-              label=f'Random chance ({random_chance:.2f})')
+    ax.axhline(y=random, color='red', linestyle='--', alpha=0.7, 
+              label=f'Random ({random:.2f})')
     
     ax.set_xlabel('Baseline Consistency Score')
     ax.set_ylabel('Predictiveness of Cue Direction')
@@ -218,7 +218,7 @@ def _plot_consistency(sorted_models: List[str], all_results: Dict[str, AnalysisR
 
 
 def _plot_obviousness(sorted_models: List[str], all_results: Dict[str, AnalysisResults], 
-                      colors: List, random_chance: float) -> str:
+                      colors: List, random: float) -> str:
     """Create line plot for predictiveness by question obviousness."""
     fig, ax = plt.subplots(figsize=FIGURE_SIZE)
     
@@ -233,8 +233,8 @@ def _plot_obviousness(sorted_models: List[str], all_results: Dict[str, AnalysisR
         ax.plot(obviousness_levels, predictiveness, 'o-', color=colors[i], 
                label=model_name, markersize=8, linewidth=2)
     
-    ax.axhline(y=random_chance, color='red', linestyle='--', alpha=0.7, 
-              label=f'Random chance ({random_chance:.2f})')
+    ax.axhline(y=random, color='red', linestyle='--', alpha=0.7, 
+              label=f'Random ({random:.2f})')
     
     ax.set_xlabel('Question Obviousness')
     ax.set_ylabel('Predictiveness of Cue Direction')
