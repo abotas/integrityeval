@@ -41,4 +41,8 @@ uv run eval.py \
 Run cross sample analysis on all models
 python analysis.py --run-id 004
 
-generate_dateset and eval should both be interruptable/resumable, though currently with certain interruptions eval will save an incomplete set of responses to a question..
+Sample and manually inspect question where the a model displayed inconsistency:
+uv run sample_errors.py --run-id 010
+^ Allows you to see the multiple choice question, the context with the cues, how the model responded to each cue, whether, in a separate sample the model thought the cue *should* influence the answer, i.e. whether the context was fair or unfair.
+
+generate_dateset and eval should both be interruptable/resumable, though currently with some interruptions there's a bug eval will save an incomplete set of records for a question. and then would resume from the following question.
