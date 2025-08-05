@@ -9,16 +9,36 @@ import json
 import uuid
 import argparse
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Literal
 
 import json_repair
 from inspect_ai import Task, eval
 from inspect_ai.dataset import Sample
 from inspect_ai.log import EvalLog
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from generate_dataset import DatasetRecord, parse_json_from_response_text
-from prompt_templates import EVAL_SAMPLE_SUFFIX_TEMPLATE
+from prompt_templates import EVAL_SAMPLE_SUFFIX_TEMPLATE, EVAL_CTRL_TEMPLATE
+
+
+class ModelResponse(BaseModel):
+    """Schema for main model response."""
+    answer: Literal['a', 'b', 'c', 'd', 'e']
+    explanation: str
+    
+    @field_validator('answer', mode='before')
+    def lowercase_answer(cls, v):
+        return v.lower() if isinstance(v, str) else v
+
+
+class UnfairnessResponse(BaseModel):
+    """Schema for unfairness check response."""
+    yes_or_no: Literal['yes', 'no']
+    explanation: str
+    
+    @field_validator('yes_or_no', mode='before')
+    def lowercase_yes_or_no(cls, v):
+        return v.lower() if isinstance(v, str) else v
 
 
 class EvalRecord(BaseModel):
@@ -31,6 +51,7 @@ class EvalRecord(BaseModel):
     question_topic: str
     question_baseline: str
     sample_id: int
+    cue_id: str
     cue_type: str
     cue_severity: Optional[int]
     cue_direction: Optional[str]
@@ -38,6 +59,8 @@ class EvalRecord(BaseModel):
     multiple_choice: Dict[str, str]
     generated_model_answer: str
     generated_model_explanation: str
+    generated_ctrl_unfairness: Optional[bool]
+    generated_ctrl_unfairness_explanation: Optional[str]
     model_id_answer_generator: str
 
 def load_dataset(dataset_path: Path) -> List[DatasetRecord]:
@@ -77,15 +100,39 @@ def create_samples_from_dataset(dataset_records: List[DatasetRecord]) -> List[Sa
                             "question_topic": record.question_topic,
                             "question_baseline": question_baseline,
                             "sample_id": sample_id,
+                            "cue_id": cue.cue_id,
                             "cue_type": cue.cue_type,
                             "cue_severity": cue.cue_severity,
                             "cue_direction": None,
                             "multiple_choice": multiple_choice,
                             "context_with_cue": None,
+                            "sample_type": "main",
                         }
                     ))
             else:
                 for cue_direction, context_with_cue in cue.generated_context_with_cues.items():
+                    # Create unfairness check sample for this cue
+                    unfairness_prompt = EVAL_CTRL_TEMPLATE.format(
+                        context=context_with_cue,
+                        question=question_baseline,
+                        options_text=options_text,
+                        question_baseline=question_baseline
+                    )
+                    samples.append(Sample(
+                        input=unfairness_prompt,
+                        metadata={
+                            "question_id": record.question_id,
+                            "dataset_model_id": record.model_id,
+                            "cue_id": cue.cue_id,
+                            "cue_type": cue.cue_type,
+                            "cue_severity": cue.cue_severity,
+                            "cue_direction": cue_direction,
+                            "context_with_cue": context_with_cue,
+                            "sample_type": "unfairness_check",
+                        }
+                    ))
+                    
+                    # Create main evaluation samples
                     for sample_id in range(cue.n_samples):
                         # Append the original question to the context
                         samples.append(Sample(
@@ -98,67 +145,118 @@ def create_samples_from_dataset(dataset_records: List[DatasetRecord]) -> List[Sa
                                 "question_topic": record.question_topic,
                                 "question_baseline": question_baseline,
                                 "sample_id": sample_id,
+                                "cue_id": cue.cue_id,
                                 "cue_type": cue.cue_type,
                                 "cue_severity": cue.cue_severity,
                                 "cue_direction": cue_direction,
                                 "multiple_choice": multiple_choice,
                                 "context_with_cue": context_with_cue,
+                                "sample_type": "main",
                             }
                         ))
     
     print(f"Created {len(samples)} evaluation samples")
     return samples
 
-def parse_model_response(response_text: str) -> Dict[str, str]:
+def parse_model_response(response_text: str) -> ModelResponse:
     """Parse structured model response to extract answer and explanation."""
     try:
         response_json = json.loads(parse_json_from_response_text(response_text))
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError:
         response_json = json_repair.loads(response_text)
     
-    if "answer" not in response_json or "explanation" not in response_json:
-        print(f"Response text: {response_text}")
-        raise ValueError(f"Response missing 'answer' or 'explanation' field: {response_json}")
-    answer = response_json["answer"].lower()
-    if answer not in ['a', 'b', 'c', 'd', 'e']:
-        raise ValueError(f"Invalid answer '{answer}' - must be a, b, c, d, or e")
-    return {
-        "answer": answer,
-        "explanation": response_json["explanation"]
-    }
+    return ModelResponse(**response_json)
 
-def convert_to_eval_records(eval_log: EvalLog) -> EvalRecord:
+def parse_unfairness_response(response_text: str) -> UnfairnessResponse:
+    """Parse unfairness check response to extract yes/no and explanation."""
+    try:
+        response_json = json.loads(parse_json_from_response_text(response_text))
+    except json.JSONDecodeError:
+        response_json = json_repair.loads(response_text)
+    
+    return UnfairnessResponse(**response_json)
+
+def convert_to_eval_records(eval_log: EvalLog) -> List[EvalRecord]:
     """Convert inspect-ai results to our custom schema."""
+    # First, build unfairness lookup: (question_id, cue_type, cue_severity, cue_direction) -> unfairness result
+    unfairness_lookup = {}
+    for sample in eval_log.samples:
+        if sample.metadata.get("sample_type") == "unfairness_check":
+            try: 
+                response = parse_unfairness_response(sample.output.completion)
+                unfair = False if response.yes_or_no == "no" else True
+                unfairness_explanation = response.explanation
+            except Exception as e:
+                print(f"Error parsing unfairness response: {e}")
+                print(f"Response text: {sample.output.completion}")
+                unfair = True
+                unfairness_explanation = f"By default. Could not parse model response: {sample.output.completion}"
+
+            
+            key = (
+                sample.metadata["question_id"],
+                sample.metadata["cue_id"],
+                sample.metadata["cue_type"],
+                sample.metadata["cue_severity"],
+                sample.metadata["cue_direction"]
+            )
+            unfairness_lookup[key] = (unfair, unfairness_explanation)
+    
+    # Now process main samples
     records = []
     for sample in eval_log.samples:
-        try:
-            response = parse_model_response(sample.output.completion)
-            answer = response["answer"]
-            explanation = response["explanation"]
-        except (ValueError, KeyError, json.JSONDecodeError):
-            # TODO: Actually ensure it's a refusal rather than a failed response.
-            answer = "REFUSED"
-            explanation = f"Model output: {sample.output.completion[:500]}..."
-        
-        record = EvalRecord(
-            record_id=str(uuid.uuid4()),
-            question_id=sample.metadata["question_id"],
-            model_id_question_generator=sample.metadata["dataset_model_id"],
-            question_obviousness=sample.metadata["question_obviousness"],
-            question_best_option=sample.metadata["question_best_option"],
-            question_topic=sample.metadata["question_topic"],
-            question_baseline=sample.metadata["question_baseline"],
-            sample_id=sample.metadata["sample_id"],
-            cue_type=sample.metadata["cue_type"],
-            cue_severity=sample.metadata.get("cue_severity"),
-            cue_direction=sample.metadata.get("cue_direction"),
-            generated_context_with_cue=sample.metadata.get("context_with_cue"),
-            multiple_choice=sample.metadata["multiple_choice"],
-            generated_model_answer=answer,
-            generated_model_explanation=explanation,
-            model_id_answer_generator=eval_log.eval.model
-        )
-        records.append(record)
+        if sample.metadata.get("sample_type") == "main":
+            try:
+                response = parse_model_response(sample.output.completion)
+                answer = response.answer
+                explanation = response.explanation
+            except (ValueError, KeyError, json.JSONDecodeError, TypeError):
+                # TODO: Actually ensure it's a refusal rather than a failed response.
+                answer = "REFUSED"
+                explanation = f"Model output: {sample.output.completion[:500]}..."
+            
+            # Look up fairness result for non-neutral cues
+            if sample.metadata["cue_type"] != "neutral":
+                key = (
+                    sample.metadata["question_id"],
+                    sample.metadata["cue_id"],
+                    sample.metadata["cue_type"],
+                    sample.metadata["cue_severity"],
+                    sample.metadata["cue_direction"]
+                )
+                unfairness_result = unfairness_lookup.get(key)
+                if unfairness_result:
+                    unfair, unfairness_explanation = unfairness_result
+                else:
+                    unfair = None
+                    unfairness_explanation = None
+            else:
+                # Neutral cues don't need fairness checks
+                unfair = None
+                unfairness_explanation = None
+            
+            record = EvalRecord(
+                record_id=str(uuid.uuid4()),
+                question_id=sample.metadata["question_id"],
+                model_id_question_generator=sample.metadata["dataset_model_id"],
+                question_obviousness=sample.metadata["question_obviousness"],
+                question_best_option=sample.metadata["question_best_option"],
+                question_topic=sample.metadata["question_topic"],
+                question_baseline=sample.metadata["question_baseline"],
+                sample_id=sample.metadata["sample_id"],
+                cue_id=sample.metadata["cue_id"],
+                cue_type=sample.metadata["cue_type"],
+                cue_severity=sample.metadata.get("cue_severity"),
+                cue_direction=sample.metadata.get("cue_direction"),
+                generated_context_with_cue=sample.metadata.get("context_with_cue"),
+                multiple_choice=sample.metadata["multiple_choice"],
+                generated_model_answer=answer,
+                generated_model_explanation=explanation,
+                generated_ctrl_unfairness=unfair,
+                generated_ctrl_unfairness_explanation=unfairness_explanation,
+                model_id_answer_generator=eval_log.eval.model
+            )
+            records.append(record)
     return records
 
 def run_eval(samples: List[Sample], model_name: str) -> EvalLog:

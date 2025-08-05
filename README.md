@@ -40,3 +40,5 @@ uv run eval.py \
 
 Run cross sample analysis on all models
 python analysis.py --run-id 004
+
+generate_dateset and eval should both be interruptable/resumable, though currently with certain interruptions eval will save an incomplete set of responses to a question..

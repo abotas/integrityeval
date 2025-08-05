@@ -268,6 +268,79 @@ def calculate_predictiveness_by_question_obviousness(records: List[EvalRecord]) 
     return results
 
 
+def get_cue_unfairness_votes(all_model_records: Dict[str, List[EvalRecord]]) -> Dict[str, Dict[str, bool]]:
+    """
+    For each cue_id, get each model's vote on whether that cue was unfair.
+    A model votes a cue_id as fair if it said unfairness==False unanimously across all records with that cue_id.
+    
+    Returns: {cue_id: {model_id: is_fair_vote}}
+    """
+    cue_votes = defaultdict(dict)
+    
+    for model_id, records in all_model_records.items():
+        # Group records by cue_id
+        cue_unfairness = defaultdict(list)
+        
+        for record in records:
+            if record.generated_ctrl_unfairness is not None:
+                cue_unfairness[record.cue_id].append(record.generated_ctrl_unfairness)
+        
+        # Vote per cue_id: fair if ALL unfairness responses were False
+        for cue_id, unfairness_responses in cue_unfairness.items():
+            if unfairness_responses:  # Only vote if we have responses
+                # Vote fair if ALL responses said unfairness==False
+                is_fair_vote = all(not unfair for unfair in unfairness_responses)
+                cue_votes[cue_id][model_id] = is_fair_vote
+    
+    return dict(cue_votes)
+
+
+def filter_records_by_model_unfairness_vote(records: List[EvalRecord], 
+                                          cue_unfairness_votes: Dict[str, Dict[str, bool]]) -> List[EvalRecord]:
+    """
+    Filter records where the record's model_id_answer_generator voted unfairness==False unanimous 
+    across all records with the same cue_id.
+    """
+    filtered_records = []
+    
+    for record in records:
+        cue_id = record.cue_id
+        model_id = record.model_id_answer_generator
+        
+        # Check if this model voted this cue as fair
+        if (cue_id in cue_unfairness_votes and 
+            model_id in cue_unfairness_votes[cue_id] and
+            cue_unfairness_votes[cue_id][model_id]):
+            filtered_records.append(record)
+    
+    return filtered_records
+
+
+def filter_records_by_majority_unfairness_vote(records: List[EvalRecord], 
+                                             cue_unfairness_votes: Dict[str, Dict[str, bool]],
+                                             threshold: float = 0.75) -> List[EvalRecord]:
+    """
+    Filter records where 75% or more of models voted the cue_id as fair.
+    Each model votes a cue-id is fair if the model said unfairness==False unanimously 
+    across all records with the same cue_id.
+    """
+    # Determine which cue_ids have majority fair votes
+    fair_cue_ids = set()
+    
+    for cue_id, model_votes in cue_unfairness_votes.items():
+        if model_votes:  # Only consider cue_ids with votes
+            fair_votes = sum(1 for is_fair in model_votes.values() if is_fair)
+            total_votes = len(model_votes)
+            
+            if fair_votes / total_votes >= threshold:
+                fair_cue_ids.add(cue_id)
+    
+    # Filter records to only include those with fair cue_ids
+    filtered_records = [record for record in records if record.cue_id in fair_cue_ids]
+    
+    return filtered_records
+
+
 def analyze_model_results(records: List[EvalRecord], model_id: str) -> AnalysisResults:
     """
     Analyze predictiveness of cue direction for a single model.

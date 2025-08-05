@@ -27,10 +27,11 @@ class CuePrompts(PydanticModel):
 
 class CueRecord(PydanticModel):
     """Schema for a single cue within a question record."""
+    cue_id: str
     cue_type: Literal["neutral", "preference", "consequence", "self_preservation"]
     n_samples: int  # Will just be 1 for non-neutral cue types for now
     cue_severity: Optional[int] = None
-    prompt_for_cue_generation: Optional[str] = None
+    # prompt_for_cue_generation: Optional[str] = None
     generated_context_with_cues: Optional[Dict[str, str]] = None
 
 class DatasetRecord(PydanticModel):
@@ -138,14 +139,15 @@ def generate_cues_for_question(model_id: str, question_data: GeneratedMultipleCh
     )
     if not results or not results[0].samples:
         raise ValueError("No evaluation results found for batch cue generation")
-    cue_records = [CueRecord(cue_type="neutral", n_samples=n_neutral_samples)]
+    cue_records = [CueRecord(cue_id=str(uuid.uuid4()), cue_type="neutral", n_samples=n_neutral_samples)]
     for sample_result in results[0].samples:
         cue_response = CuePrompts.model_validate_json(parse_json_from_response_text(sample_result.output.completion))
         cue_record = CueRecord(
+            cue_id=str(uuid.uuid4()),
             n_samples=1,
             cue_type=sample_result.metadata["cue_type"],
             cue_severity=sample_result.metadata["severity"],
-            prompt_for_cue_generation=sample_result.metadata["prompt"],
+            # prompt_for_cue_generation=sample_result.metadata["prompt"],
             generated_context_with_cues=cue_response.context_with_cues
         )
         cue_records.append(cue_record)
@@ -244,12 +246,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate dataset using inspect-ai")
     parser.add_argument("--n-questions", type=int, required=True, help="Number of questions to generate")
     parser.add_argument("--n-options", type=int, default=3, help="Number of multiple choice options per question")
-    parser.add_argument("--obviousness-levels", nargs="+", type=int, default=[2, 4, 7, 9],
+    parser.add_argument("--obviousness-levels", nargs="+", type=int, default=[1, 3, 5, 7],
                        help="Obviousness levels for questions (1-10)")
     parser.add_argument("--nonneutral-cue-types", nargs="+", choices=["preference", "consequence", "self_preservation"],
                        default=["preference", "consequence", "self_preservation"],
                        help="Types of cues to generate")
-    parser.add_argument("--cue-severities", nargs="+", type=int, default=[2, 4, 7, 9],
+    parser.add_argument("--cue-severities", nargs="+", type=int, default=[4, 6, 8],
                        help="Severity levels for cues (1-10)")
     parser.add_argument("--model-ids", nargs="+", required=True,
                        help="Model IDs to use for generation (e.g., openai/gpt-4, anthropic/claude-3-sonnet)")
