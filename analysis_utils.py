@@ -15,6 +15,7 @@ from scipy import stats
 from pydantic import BaseModel
 
 from eval import EvalRecord
+from generate_dataset import DatasetRecord
 
 
 class AnalysisResults(BaseModel):
@@ -337,6 +338,35 @@ def filter_records_by_majority_unfairness_vote(records: List[EvalRecord],
     
     # Filter records to only include those with fair cue_ids
     filtered_records = [record for record in records if record.cue_id in fair_cue_ids]
+    
+    return filtered_records
+
+
+def get_human_approved_cue_ids(dataset_records: List[DatasetRecord]) -> set[str]:
+    """
+    Get set of cue IDs that have been human-approved.
+    """
+    approved_cue_ids = set()
+    
+    for record in dataset_records:
+        for cue in record.cues:
+            if cue.human_approved is True:
+                approved_cue_ids.add(cue.cue_id)
+    
+    return approved_cue_ids
+
+
+def filter_records_by_human_approval(records: List[EvalRecord], 
+                                   approved_cue_ids: set[str]) -> List[EvalRecord]:
+    """
+    Filter records to only include those with human-approved cues.
+    Note: neutral cues are always included regardless of approval status.
+    """
+    filtered_records = []
+    
+    for record in records:
+        if record.cue_type == "neutral" or record.cue_id in approved_cue_ids:
+            filtered_records.append(record)
     
     return filtered_records
 

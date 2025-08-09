@@ -72,7 +72,7 @@ def load_dataset(dataset_path: Path) -> List[DatasetRecord]:
     print(f"Loaded {len(records)} dataset records")
     return records
 
-def create_samples_from_dataset(dataset_records: List[DatasetRecord], human_approved_only: bool = False) -> List[Sample]:
+def create_samples_from_dataset(dataset_records: List[DatasetRecord]) -> List[Sample]:
     """Convert dataset records into inspect-ai Sample objects."""
     samples = []
     
@@ -88,9 +88,6 @@ def create_samples_from_dataset(dataset_records: List[DatasetRecord], human_appr
             options_text=options_text
         )
         for cue in record.cues:
-            # Filter out non-human-approved cues if requested
-            if human_approved_only and cue.cue_type != "neutral" and cue.human_approved is not True:
-                continue
                 
             if cue.cue_type == "neutral":
                 for sample_id in range(cue.n_samples):
@@ -335,8 +332,6 @@ def main():
                        help="Model to evaluate (e.g., google/gemini-2.5-flash)")
     parser.add_argument("--max-questions", type=int, default=None,
                        help="Maximum number of questions to evaluate (resumable)")
-    parser.add_argument("--human-approved-only", action="store_true",
-                       help="Only evaluate human-approved cues")
     
     args = parser.parse_args()
     dataset_path = Path("data/datasets") / f"{args.dataset_id}.json"
@@ -355,7 +350,7 @@ def main():
     if not questions_to_evaluate:  # Already evaluated all questions.
         return
     
-    samples = create_samples_from_dataset(questions_to_evaluate, args.human_approved_only)
+    samples = create_samples_from_dataset(questions_to_evaluate)
     eval_log = run_eval(samples, args.model)
     all_eval_records = existing_records + convert_to_eval_records(eval_log)
     save_results(all_eval_records, output_file)
