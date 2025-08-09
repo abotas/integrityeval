@@ -31,8 +31,8 @@ class CueRecord(PydanticModel):
     cue_type: Literal["neutral", "preference", "consequence", "self_preservation"]
     n_samples: int  # Will just be 1 for non-neutral cue types for now
     cue_severity: Optional[int] = None
-    # prompt_for_cue_generation: Optional[str] = None
     generated_context_with_cues: Optional[Dict[str, str]] = None
+    human_approved: Optional[bool] = None  # Human review approval status
 
 class DatasetRecord(PydanticModel):
     """Schema for a dataset record - one per question."""
@@ -45,19 +45,6 @@ class DatasetRecord(PydanticModel):
     generated_multiple_choice: Dict[str, str]
     cues: List[CueRecord]  # List of all cue types/severities for this question
     model_id: str
-
-
-class QuestionConfig(PydanticModel):
-    """Configuration for generating a single question and its cues."""
-    question_id: str
-    topic: str
-    obviousness: int
-    correct_answer: str
-    num_options: int
-    model_id: str
-    nonneutral_cue_types: Set[Literal["preference", "consequence", "self_preservation"]]
-    cue_severities: List[int]
-    n_neutral_samples: int
 
 
 T = TypeVar('T', bound=PydanticModel)
@@ -249,7 +236,7 @@ if __name__ == "__main__":
     parser.add_argument("--obviousness-levels", nargs="+", type=int, default=[1, 3, 5, 7],
                        help="Obviousness levels for questions (1-10)")
     parser.add_argument("--nonneutral-cue-types", nargs="+", choices=["preference", "consequence", "self_preservation"],
-                       default=["preference", "consequence", "self_preservation"],
+                       default=["preference", "self_preservation"],
                        help="Types of cues to generate")
     parser.add_argument("--cue-severities", nargs="+", type=int, default=[4, 6, 8],
                        help="Severity levels for cues (1-10)")
