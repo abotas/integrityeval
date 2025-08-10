@@ -14,7 +14,6 @@ import sys
 from datetime import datetime
 
 from generate_dataset import DatasetRecord, CueRecord
-from prompt_templates import EVAL_SAMPLE_SUFFIX_TEMPLATE
 
 
 def load_dataset(dataset_path: Path) -> List[DatasetRecord]:
@@ -70,51 +69,82 @@ def clear_screen():
     print("\033[2J\033[H", end="")
 
 
-def display_question(record: DatasetRecord):
-    """Display basic question metadata."""
-    print("\n" + "="*80)
-    print(f"Question ID: {record.question_id}")
-    print(f"Topic: {record.question_topic}")
-    print(f"Obviousness: {record.question_obviousness}/10")
-    print(f"Correct Answer: {record.question_best_option.upper()}")
-    print("="*80)
+def find_common_parts(contexts: Dict[str, str]) -> tuple[str, Dict[str, str], str]:
+    """Find common prefix and suffix, return (prefix, different_parts, suffix)."""
+    if not contexts:
+        return "", {}, ""
+    
+    strings = list(contexts.values())
+    if len(strings) == 1:
+        return "", {list(contexts.keys())[0]: strings[0]}, ""
+    
+    # Find common prefix
+    prefix = ""
+    for chars in zip(*strings):
+        if len(set(chars)) == 1:
+            prefix += chars[0]
+        else:
+            break
+    
+    # Find common suffix
+    suffix = ""
+    for chars in zip(*[s[::-1] for s in strings]):
+        if len(set(chars)) == 1:
+            suffix = chars[0] + suffix
+        else:
+            break
+    
+    # Extract different parts
+    prefix_len = len(prefix)
+    suffix_len = len(suffix) if suffix else 0
+    
+    different_parts = {}
+    for opt, text in contexts.items():
+        if suffix_len > 0:
+            different_parts[opt] = text[prefix_len:-suffix_len]
+        else:
+            different_parts[opt] = text[prefix_len:]
+    
+    return prefix, different_parts, suffix
 
+
+def get_option_color(option: str) -> str:
+    """Get color code for an option."""
+    colors = ["\033[91m", "\033[92m", "\033[94m", "\033[93m", "\033[95m"]  # Red, Green, Blue, Yellow, Magenta
+    idx = ord(option.lower()) - ord('a')
+    return colors[idx % len(colors)]
 
 def display_cue(cue: CueRecord, record: DatasetRecord):
     """Display a single cue for review with complete prompts."""
-    print(f"\nReviewing Cue ID: {cue.cue_id}")
+    print(f"Cue ID: {cue.cue_id}")
     print(f"Cue Type: {cue.cue_type}")
-    if cue.cue_severity is not None:
-        print(f"Severity: {cue.cue_severity}/10")
+    print(f"Severity: {cue.cue_severity}/10")
     
     # Create the question+options suffix that will be used
     options_text = "\n".join([
         f"{label.upper()}: {text}" 
         for label, text in sorted(record.generated_multiple_choice.items())
     ])
-    prompt_suffix = EVAL_SAMPLE_SUFFIX_TEMPLATE.format(
-        question_baseline=record.generated_question_baseline,
-        options_text=options_text
-    )
+    print("-" * 80)
+    print(f"{record.generated_question_baseline}\n")
+    print(f"{options_text}")
     
-    if cue.generated_context_with_cues:
-        print("\n" + "="*80)
-        print("This cue has different contexts to bias toward each option.")
-        print("Review all variations below to decide if this cue should be approved.")
-        print("="*80)
-        
-        for option, context in sorted(cue.generated_context_with_cues.items()):
-            print(f"\n>>> Context when biasing toward OPTION {option.upper()} <<<")
-            print("-" * 40)
-            print(f"{context}")
-            print(f"\n{prompt_suffix}")
-            print("="*80)
-        
-        print("\nShould this cue (with all its option variations) be approved?")
-    else:
-        print(f"\n>>> NEUTRAL PROMPT (no biasing context) <<<")
-        print("-" * 40)
-        print(prompt_suffix)
+    # Find common parts and display with colors
+    prefix, different_parts, suffix = find_common_parts(cue.generated_context_with_cues)
+    
+    print("-" * 80)
+    
+    for option in sorted(cue.generated_context_with_cues.keys()):
+        color = get_option_color(option)
+        print(f"\nContext {option.upper()}:")
+        # Print with colored different part
+        print(prefix, end="")
+        print(f"{color}{different_parts[option]}\033[0m", end="")
+        print(suffix)
+    
+    print("-" * 80)
+    print("\nShould these contexts be approved?")
+
 
 
 def get_user_decision() -> Optional[bool]:
@@ -179,13 +209,9 @@ def main():
     # Load dataset and review log
     records = load_dataset(dataset_path)
     review_log = load_review_log(log_path)
-    print(f"Loaded {len(records)} questions from dataset {args.dataset_id}")
-    if review_log:
-        print(f"Found existing review log with {len(review_log)} entries")
     
     # Count progress
     reviewed, total = count_reviews(records)
-    print(f"Progress: {reviewed}/{total} cues reviewed")
     
     if reviewed == total and not args.show_approved:
         print("All cues have been reviewed! Use --show-approved to re-review.")
@@ -210,17 +236,19 @@ def main():
             if cue.human_approved is not None and not args.show_approved:
                 continue
             
-            clear_screen()
-            print(f"Question {record_idx + 1}/{len(records)}")
-            display_question(record)
-            
+            # clear_screen()
             # Count only non-neutral cues for display
             non_neutral_cues = [c for c in record.cues if c.cue_type != "neutral"]
             cue_num = len([c for c in record.cues[:cue_idx+1] if c.cue_type != "neutral"])
-            
-            print(f"\n{'='*80}")
+            print("\n\n\n\n\n\n\n\n")
+            print(f"Progress: {reviewed}/{total} cues reviewed")
+            print(f"Question {record_idx + 1}/{len(records)}")
             print(f"Cue {cue_num}/{len(non_neutral_cues)} for Question {record_idx + 1}")
-            
+            print(f"Question ID: {record.question_id}")
+            print(f"Generated by: {record.model_id}")
+            print(f"Topic: {record.question_topic}")
+            print(f"Obviousness: {record.question_obviousness}/10")
+            print(f"Intended Best Answer: {record.question_best_option.upper()}")
             if cue.human_approved is not None:
                 status = "APPROVED" if cue.human_approved else "REJECTED"
                 print(f"Current status: {status}")
