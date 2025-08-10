@@ -25,7 +25,6 @@ Get signal on model epistemic virtue without taking stances around "what is actu
 ### Analysis
 - `analysis.py` - Statistical analysis and report generation
 - `analysis_utils.py` - Core analysis functions (predictiveness, significance)
-- `sample_errors.py` - Manual inspection of inconsistent responses
 - Output: HTML reports with visualizations
 
 ## Key Concepts

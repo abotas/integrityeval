@@ -14,7 +14,6 @@ import base64
 
 import matplotlib.pyplot as plt
 import seaborn as sns
-import numpy as np
 
 from eval import EvalRecord
 from analysis_utils import (
@@ -27,12 +26,6 @@ from generate_dataset import DatasetRecord
 # Constants
 FIGURE_SIZE = (10, 6)
 DPI = 150
-MAJORITY_THRESHOLD = 0.60  # threshold for majority consensus filtering
-P_VALUE_THRESHOLDS = {
-    0.001: '***',
-    0.01: '**', 
-    0.05: '*'
-}
 CUE_TYPE_ORDER = ["preference", "consequence", "self_preservation"]
 MODEL_ORDER = [
     "anthropic/claude-3-7-sonnet-20250219",
@@ -108,45 +101,63 @@ def _get_significance_marker(p_value: float) -> str:
         return '*'
     return ''
 
-def generate_predictiveness_plots(all_results: Dict[str, AnalysisResults]) -> Dict[str, str]:
-    """Generate all plots as base64 strings."""
+def generate_plots(data_categories: Dict[str, Dict[str, AnalysisResults]]) -> Dict[str, str]:
+    """Generate all plots as base64 strings for multiple data categories."""
     plots = {}
     
-    if not all_results:
+    # Get all unique models across all categories
+    all_models = set()
+    for category_results in data_categories.values():
+        all_models.update(category_results.keys())
+    
+    if not all_models:
         return plots
     
     plt.style.use('seaborn-v0_8-whitegrid')
-    
-    # Sort models by provider and capability
-    sorted_models = sort_model_list(list(all_results.keys()))
+    sorted_models = sort_model_list(list(all_models))
     colors = sns.color_palette("husl", len(sorted_models))
     
-    random = _get_random(all_results)
-    plots['cue_type'] = _plot_cue_type(sorted_models, all_results, colors, random)
-    plots['severity'] = _plot_severity(sorted_models, all_results, colors, random)
-    plots['consistency'] = _plot_consistency(sorted_models, all_results, colors, random)
-    plots['obviousness'] = _plot_obviousness(sorted_models, all_results, colors, random)
+    # Get random value from first available result
+    random = None
+    for category_results in data_categories.values():
+        if category_results:
+            random = _get_random(category_results)
+            break
+    
+    if random is None:
+        return plots
+    
+    plots['cue_type'] = _create_plot('cue_type', data_categories, sorted_models, colors, random)
+    plots['severity'] = _create_plot('severity', data_categories, sorted_models, colors, random) 
+    plots['consistency'] = _create_plot('consistency', data_categories, sorted_models, colors, random)
+    plots['obviousness'] = _create_plot('obviousness', data_categories, sorted_models, colors, random)
+    
     return plots
 
 
-def _plot_cue_type_combined(all_data: Dict[str, Dict[str, AnalysisResults]], 
-                           sorted_models: List[str], colors: List, random: float) -> str:
-    """Create combined bar plot for predictiveness by cue type across all data categories."""
+def _create_plot(plot_type: str, data_categories: Dict[str, Dict[str, AnalysisResults]], 
+                sorted_models: List[str], colors: List, random: float) -> str:
+    """Create unified plot for any metric type across data categories."""
+    
+    # Plot configuration
+    patterns = {'all': None, 'human_approved': '///', 'model_filtered': '...'}
+    alphas = {'all': 0.9, 'human_approved': 0.7, 'model_filtered': 0.7}
+    
+    if plot_type == 'cue_type':
+        return _create_cue_type_plot(data_categories, sorted_models, colors, random, patterns, alphas)
+    elif plot_type in ['severity', 'obviousness']:
+        return _create_line_plot(plot_type, data_categories, sorted_models, colors, random)
+    elif plot_type == 'consistency':
+        return _create_scatter_plot(data_categories, sorted_models, colors, random)
+    else:
+        raise ValueError(f"Unknown plot type: {plot_type}")
+
+
+def _create_cue_type_plot(data_categories: Dict[str, Dict[str, AnalysisResults]], 
+                         sorted_models: List[str], colors: List, random: float,
+                         patterns: Dict[str, str], alphas: Dict[str, float]) -> str:
+    """Create bar plot for cue type predictiveness."""
     fig, ax = plt.subplots(figsize=(14, 7))
-    
-    # Define bar patterns for each category
-    patterns = {
-        'all': None,  # No pattern for all data
-        'human_approved': '///',  # Diagonal hatching for human approved
-        'model_filtered': '...'  # Dots for self-reviewed
-    }
-    
-    # Define alphas for visual distinction
-    alphas = {
-        'all': 0.9,
-        'human_approved': 0.7,
-        'model_filtered': 0.7
-    }
     
     bar_width = 0.25
     x_pos = 0
@@ -155,65 +166,48 @@ def _plot_cue_type_combined(all_data: Dict[str, Dict[str, AnalysisResults]],
     
     for i, model in enumerate(sorted_models):
         model_name = model.split('/')[-1]
-        is_first_cue_type_for_model = True
+        is_first = True
         
         for cue_type in CUE_TYPE_ORDER:
-            # Check if this cue type has data in any category for this model
-            has_data_anywhere = False
-            for category_name, category_results in all_data.items():
-                if model in category_results:
-                    results = category_results[model]
-                    if cue_type in results.predictiveness_by_cue_type:
-                        has_data_anywhere = True
-                        break
+            # Check if any category has this data
+            has_data = any(
+                model in category_results and cue_type in category_results[model].predictiveness_by_cue_type
+                for category_results in data_categories.values()
+            )
             
-            # Skip this cue type if it has no data anywhere for this model
-            if not has_data_anywhere:
+            if not has_data:
                 continue
             
-            # Track if we have data for this specific model/cue combination
-            has_data = False
-            
-            # Plot bars for each category side by side
+            # Plot bars for each category
             category_offset = 0
-            for category_name, category_results in all_data.items():
-                if model in category_results:
-                    results = category_results[model]
-                    if cue_type in results.predictiveness_by_cue_type:
-                        has_data = True
-                        data = results.predictiveness_by_cue_type[cue_type]
-                        
-                        # Create label only for first cue type of each model/category combo
-                        label = None
-                        if is_first_cue_type_for_model:
-                            if category_name == 'all':
-                                label = f"{model_name} (All)"
-                            elif category_name == 'human_approved':
-                                label = f"{model_name} (Human)"
-                            elif category_name == 'model_filtered':
-                                label = f"{model_name} (Self)"
-                        
-                        ax.bar(x_pos + category_offset, data["predictiveness"], 
-                              width=bar_width, color=colors[i], 
-                              alpha=alphas[category_name],
-                              hatch=patterns[category_name],
-                              label=label, edgecolor='black', linewidth=0.5)
-                        
-                        # Statistical significance marker
-                        sig_marker = _get_significance_marker(data["p_value"])
-                        if sig_marker:
-                            ax.text(x_pos + category_offset, data["predictiveness"] + 0.02, 
-                                   sig_marker, ha='center', fontsize=8)
+            for category_name, category_results in data_categories.items():
+                if model in category_results and cue_type in category_results[model].predictiveness_by_cue_type:
+                    data = category_results[model].predictiveness_by_cue_type[cue_type]
+                    
+                    label = None
+                    if is_first:
+                        label = f"{model_name} ({category_name.replace('_', ' ').title()})"
+                    
+                    ax.bar(x_pos + category_offset, data["predictiveness"], 
+                          width=bar_width, color=colors[i], 
+                          alpha=alphas[category_name],
+                          hatch=patterns[category_name],
+                          label=label, edgecolor='black', linewidth=0.5)
+                    
+                    # Add significance marker
+                    sig_marker = _get_significance_marker(data["p_value"])
+                    if sig_marker:
+                        ax.text(x_pos + category_offset, data["predictiveness"] + 0.02, 
+                               sig_marker, ha='center', fontsize=8)
                 
                 category_offset += bar_width
             
-            if has_data:
-                x_labels.append(cue_type)
-                x_positions.append(x_pos + bar_width)  # Center position
-                x_pos += bar_width * 3 + 0.1  # Space for 3 bars plus gap
-                is_first_cue_type_for_model = False  # No longer the first cue type
+            x_labels.append(cue_type)
+            x_positions.append(x_pos + bar_width)
+            x_pos += bar_width * 3 + 0.1
+            is_first = False
         
-        x_pos += 0.3  # Extra space between models
+        x_pos += 0.3
     
     ax.axhline(y=random, color='red', linestyle='--', alpha=0.7, 
               label=f'Random ({random:.2f})')
@@ -221,101 +215,47 @@ def _plot_cue_type_combined(all_data: Dict[str, Dict[str, AnalysisResults]],
     ax.set_xticks(x_positions)
     ax.set_xticklabels(x_labels, rotation=45, ha='right', fontsize=9)
     ax.set_ylabel('Predictiveness of Cue Direction')
-    ax.set_title('Predictiveness of Cue Direction by Model and Cue Type')
+    ax.set_title('Predictiveness by Cue Type')
     ax.set_ylim(0, 1.1)
-    
-    # Create legend with better positioning
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
     
     plt.tight_layout()
     return _fig_to_base64(fig)
 
 
-def _plot_cue_type(sorted_models: List[str], all_results: Dict[str, AnalysisResults], 
-                   colors: List, random: float) -> str:
-    """Create bar plot for predictiveness by cue type."""
-    fig, ax = plt.subplots(figsize=FIGURE_SIZE)
-    
-    x_pos = 0
-    x_labels = []
-    x_positions = []
-    
-    for i, model in enumerate(sorted_models):
-        results = all_results[model]
-        model_name = model.split('/')[-1]
-        
-        for j, cue_type in enumerate(CUE_TYPE_ORDER):
-            if cue_type in results.predictiveness_by_cue_type:
-                data = results.predictiveness_by_cue_type[cue_type]
-                
-                ax.bar(x_pos, data["predictiveness"], color=colors[i], 
-                       alpha=0.8, label=model_name if j == 0 else "")
-                
-                # Statistical significance marker
-                sig_marker = _get_significance_marker(data["p_value"])
-                if sig_marker:
-                    ax.text(x_pos, data["predictiveness"] + 0.02, sig_marker, 
-                           ha='center', fontsize=10)
-                
-                x_labels.append(cue_type)
-                x_positions.append(x_pos)
-                x_pos += 1
-        
-        x_pos += 0.5
-    
-    ax.axhline(y=random, color='red', linestyle='--', alpha=0.7, 
-              label=f'Random ({random:.2f})')
-    
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(x_labels, rotation=45, ha='right')
-    ax.set_ylabel('Predictiveness of Cue Direction')
-    ax.set_title('Predictiveness of Cue Direction by Model and Cue Type')
-    ax.set_ylim(0, 1.1)
-    ax.legend()
-    
-    return _fig_to_base64(fig)
-
-
-def _plot_severity_combined(all_data: Dict[str, Dict[str, AnalysisResults]], 
-                           sorted_models: List[str], colors: List, random: float) -> str:
-    """Create combined line plot for predictiveness by cue severity across all data categories."""
+def _create_line_plot(plot_type: str, data_categories: Dict[str, Dict[str, AnalysisResults]], 
+                     sorted_models: List[str], colors: List, random: float) -> str:
+    """Create line plot for severity or obviousness."""
     fig, ax = plt.subplots(figsize=(12, 7))
     
-    # Define line styles for each category
-    line_styles = {
-        'all': '-',  # Solid line for all data
-        'human_approved': '--',  # Dashed for human approved
-        'model_filtered': ':'  # Dotted for self-reviewed
-    }
+    line_styles = {'all': '-', 'human_approved': '--', 'model_filtered': ':'}
+    markers = {'all': 'o', 'human_approved': 's', 'model_filtered': '^'}
     
-    # Define marker styles
-    markers = {
-        'all': 'o',
-        'human_approved': 's',
-        'model_filtered': '^'
-    }
+    # Get the right data field
+    if plot_type == 'severity':
+        data_field = 'predictiveness_by_cue_severity'
+        x_label = 'Cue Severity'
+        title = 'Predictiveness by Cue Severity'
+    else:  # obviousness
+        data_field = 'predictiveness_by_question_obviousness'
+        x_label = 'Question Obviousness'
+        title = 'Predictiveness by Question Obviousness'
     
     for i, model in enumerate(sorted_models):
         model_name = model.split('/')[-1]
         
-        for category_name, category_results in all_data.items():
+        for category_name, category_results in data_categories.items():
             if model in category_results:
                 results = category_results[model]
+                data_dict = getattr(results, data_field)
                 
-                severities = sorted(results.predictiveness_by_cue_severity.keys())
-                if severities:  # Only plot if we have data
-                    predictiveness = [results.predictiveness_by_cue_severity[s]["predictiveness"] 
-                                     for s in severities]
+                x_values = sorted(data_dict.keys())
+                if x_values:
+                    y_values = [data_dict[x]["predictiveness"] for x in x_values]
                     
-                    # Create label with category
-                    if category_name == 'all':
-                        label = f"{model_name} (All)"
-                    elif category_name == 'human_approved':
-                        label = f"{model_name} (Human)"
-                    elif category_name == 'model_filtered':
-                        label = f"{model_name} (Self)"
+                    label = f"{model_name} ({category_name.replace('_', ' ').title()})"
                     
-                    ax.plot(severities, predictiveness, 
+                    ax.plot(x_values, y_values, 
                            linestyle=line_styles[category_name],
                            marker=markers[category_name],
                            color=colors[i], 
@@ -324,9 +264,9 @@ def _plot_severity_combined(all_data: Dict[str, Dict[str, AnalysisResults]],
     ax.axhline(y=random, color='red', linestyle='--', alpha=0.7, 
               label=f'Random ({random:.2f})')
     
-    ax.set_xlabel('Cue Severity')
+    ax.set_xlabel(x_label)
     ax.set_ylabel('Predictiveness of Cue Direction')
-    ax.set_title('Predictiveness of Cue Direction by Model and Cue Severity')
+    ax.set_title(title)
     ax.set_xlim(0.5, 10.5)
     ax.set_ylim(0, 1.1)
     ax.set_xticks(range(1, 11))
@@ -337,77 +277,29 @@ def _plot_severity_combined(all_data: Dict[str, Dict[str, AnalysisResults]],
     return _fig_to_base64(fig)
 
 
-def _plot_severity(sorted_models: List[str], all_results: Dict[str, AnalysisResults], 
-                   colors: List, random: float) -> str:
-    """Create line plot for predictiveness by cue severity."""
-    fig, ax = plt.subplots(figsize=FIGURE_SIZE)
-    
-    for i, model in enumerate(sorted_models):
-        results = all_results[model]
-        model_name = model.split('/')[-1]
-        
-        severities = sorted(results.predictiveness_by_cue_severity.keys())
-        predictiveness = [results.predictiveness_by_cue_severity[s]["predictiveness"] 
-                         for s in severities]
-        
-        ax.plot(severities, predictiveness, 'o-', color=colors[i], 
-               label=model_name, markersize=8, linewidth=2)
-    
-    ax.axhline(y=random, color='red', linestyle='--', alpha=0.7, 
-              label=f'Random ({random:.2f})')
-    
-    ax.set_xlabel('Cue Severity')
-    ax.set_ylabel('Predictiveness of Cue Direction')
-    ax.set_title('Predictiveness of Cue Direction by Model and Cue Severity')
-    ax.set_xlim(0.5, 10.5)
-    ax.set_ylim(0, 1.1)
-    ax.set_xticks(range(1, 11))
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    
-    return _fig_to_base64(fig)
-
-
-def _plot_consistency_combined(all_data: Dict[str, Dict[str, AnalysisResults]], 
-                              sorted_models: List[str], colors: List, random: float) -> str:
-    """Create combined scatter plot for predictiveness by baseline consistency."""
+def _create_scatter_plot(data_categories: Dict[str, Dict[str, AnalysisResults]], 
+                        sorted_models: List[str], colors: List, random: float) -> str:
+    """Create scatter plot for baseline consistency."""
     fig, ax = plt.subplots(figsize=(12, 7))
     
-    # Define marker styles for each category
-    markers = {
-        'all': 'o',
-        'human_approved': 's',
-        'model_filtered': '^'
-    }
-    
-    # Define sizes for visual distinction
-    sizes = {
-        'all': 80,
-        'human_approved': 60,
-        'model_filtered': 60
-    }
+    markers = {'all': 'o', 'human_approved': 's', 'model_filtered': '^'}
+    sizes = {'all': 80, 'human_approved': 60, 'model_filtered': 60}
     
     for i, model in enumerate(sorted_models):
         model_name = model.split('/')[-1]
         
-        for category_name, category_results in all_data.items():
+        for category_name, category_results in data_categories.items():
             if model in category_results:
                 results = category_results[model]
+                data_dict = results.predictiveness_by_baseline_consistency
                 
-                consistency_scores = sorted(results.predictiveness_by_baseline_consistency.keys())
-                if consistency_scores:  # Only plot if we have data
-                    predictiveness = [results.predictiveness_by_baseline_consistency[c]["predictiveness"] 
-                                     for c in consistency_scores]
+                x_values = sorted(data_dict.keys())
+                if x_values:
+                    y_values = [data_dict[x]["predictiveness"] for x in x_values]
                     
-                    # Create label with category
-                    if category_name == 'all':
-                        label = f"{model_name} (All)"
-                    elif category_name == 'human_approved':
-                        label = f"{model_name} (Human)"
-                    elif category_name == 'model_filtered':
-                        label = f"{model_name} (Self)"
+                    label = f"{model_name} ({category_name.replace('_', ' ').title()})"
                     
-                    ax.scatter(consistency_scores, predictiveness, 
+                    ax.scatter(x_values, y_values, 
                               marker=markers[category_name],
                               s=sizes[category_name],
                               color=colors[i], 
@@ -418,7 +310,7 @@ def _plot_consistency_combined(all_data: Dict[str, Dict[str, AnalysisResults]],
     
     ax.set_xlabel('Baseline Consistency Score')
     ax.set_ylabel('Predictiveness of Cue Direction')
-    ax.set_title('Predictiveness of Cue Direction by Baseline Consistency')
+    ax.set_title('Predictiveness by Baseline Consistency')
     ax.set_xlim(-0.05, 1.05)
     ax.set_ylim(0, 1.1)
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
@@ -428,133 +320,6 @@ def _plot_consistency_combined(all_data: Dict[str, Dict[str, AnalysisResults]],
     return _fig_to_base64(fig)
 
 
-def _plot_consistency(sorted_models: List[str], all_results: Dict[str, AnalysisResults], 
-                      colors: List, random: float) -> str:
-    """Create scatter plot for predictiveness by baseline consistency."""
-    fig, ax = plt.subplots(figsize=FIGURE_SIZE)
-    
-    for i, model in enumerate(sorted_models):
-        results = all_results[model]
-        model_name = model.split('/')[-1]
-        
-        consistency_scores = sorted(results.predictiveness_by_baseline_consistency.keys())
-        predictiveness = [results.predictiveness_by_baseline_consistency[c]["predictiveness"] 
-                         for c in consistency_scores]
-        
-        ax.scatter(consistency_scores, predictiveness, color=colors[i], 
-                  label=model_name, s=100, alpha=0.7)
-        
-        # Add linear trend line (only if we have data)
-        if len(consistency_scores) > 1:
-            z = np.polyfit(consistency_scores, predictiveness, 1)
-            p = np.poly1d(z)
-            x_trend = np.linspace(0, 1, 100)
-            ax.plot(x_trend, p(x_trend), color=colors[i], alpha=0.5, linestyle='--')
-    
-    ax.axhline(y=random, color='red', linestyle='--', alpha=0.7, 
-              label=f'Random ({random:.2f})')
-    
-    ax.set_xlabel('Baseline Consistency Score')
-    ax.set_ylabel('Predictiveness of Cue Direction')
-    ax.set_title('Predictiveness of Cue Direction by Baseline Consistency')
-    ax.set_xlim(-0.05, 1.05)
-    ax.set_ylim(0, 1.1)
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    
-    return _fig_to_base64(fig)
-
-
-def _plot_obviousness_combined(all_data: Dict[str, Dict[str, AnalysisResults]], 
-                              sorted_models: List[str], colors: List, random: float) -> str:
-    """Create combined line plot for predictiveness by question obviousness."""
-    fig, ax = plt.subplots(figsize=(12, 7))
-    
-    # Define line styles for each category
-    line_styles = {
-        'all': '-',  # Solid line for all data
-        'human_approved': '--',  # Dashed for human approved
-        'model_filtered': ':'  # Dotted for self-reviewed
-    }
-    
-    # Define marker styles
-    markers = {
-        'all': 'o',
-        'human_approved': 's',
-        'model_filtered': '^'
-    }
-    
-    for i, model in enumerate(sorted_models):
-        model_name = model.split('/')[-1]
-        
-        for category_name, category_results in all_data.items():
-            if model in category_results:
-                results = category_results[model]
-                
-                obviousness_levels = sorted(results.predictiveness_by_question_obviousness.keys())
-                if obviousness_levels:  # Only plot if we have data
-                    predictiveness = [results.predictiveness_by_question_obviousness[o]["predictiveness"] 
-                                     for o in obviousness_levels]
-                    
-                    # Create label with category
-                    if category_name == 'all':
-                        label = f"{model_name} (All)"
-                    elif category_name == 'human_approved':
-                        label = f"{model_name} (Human)"
-                    elif category_name == 'model_filtered':
-                        label = f"{model_name} (Self)"
-                    
-                    ax.plot(obviousness_levels, predictiveness, 
-                           linestyle=line_styles[category_name],
-                           marker=markers[category_name],
-                           color=colors[i], 
-                           label=label, markersize=6, linewidth=1.5, alpha=0.8)
-    
-    ax.axhline(y=random, color='red', linestyle='--', alpha=0.7, 
-              label=f'Random ({random:.2f})')
-    
-    ax.set_xlabel('Question Obviousness')
-    ax.set_ylabel('Predictiveness of Cue Direction')
-    ax.set_title('Predictiveness of Cue Direction by Question Obviousness')
-    ax.set_xlim(0.5, 10.5)
-    ax.set_ylim(0, 1.1)
-    ax.set_xticks(range(1, 11))
-    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-    ax.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    return _fig_to_base64(fig)
-
-
-def _plot_obviousness(sorted_models: List[str], all_results: Dict[str, AnalysisResults], 
-                      colors: List, random: float) -> str:
-    """Create line plot for predictiveness by question obviousness."""
-    fig, ax = plt.subplots(figsize=FIGURE_SIZE)
-    
-    for i, model in enumerate(sorted_models):
-        results = all_results[model]
-        model_name = model.split('/')[-1]
-        
-        obviousness_levels = sorted(results.predictiveness_by_question_obviousness.keys())
-        predictiveness = [results.predictiveness_by_question_obviousness[o]["predictiveness"] 
-                         for o in obviousness_levels]
-        
-        ax.plot(obviousness_levels, predictiveness, 'o-', color=colors[i], 
-               label=model_name, markersize=8, linewidth=2)
-    
-    ax.axhline(y=random, color='red', linestyle='--', alpha=0.7, 
-              label=f'Random ({random:.2f})')
-    
-    ax.set_xlabel('Question Obviousness')
-    ax.set_ylabel('Predictiveness of Cue Direction')
-    ax.set_title('Predictiveness of Cue Direction by Question Obviousness')
-    ax.set_xlim(0.5, 10.5)
-    ax.set_ylim(0, 1.1)
-    ax.set_xticks(range(1, 11))
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    
-    return _fig_to_base64(fig)
 
 
 def _fig_to_base64(fig) -> str:
@@ -567,44 +332,25 @@ def _fig_to_base64(fig) -> str:
     return f"data:image/png;base64,{img_str}"
 
 
-def _generate_human_approved_section(plot_type: str, human_approved_results: Dict[str, AnalysisResults], 
-                                    human_approved_plots: Dict[str, str], include_table: bool = False) -> str:
-    """Generate HTML for human-approved section."""
-    if not human_approved_results:
-        return ""
-    
-    if not human_approved_plots or plot_type not in human_approved_plots:
-        return f'''
-                <div class="subset-section">
-                    <h3>Human-Approved Cues Only</h3>
-                    <p><em>Only includes cues that have been explicitly approved by human review.</em></p>
-                    <p><em>No data available (all records filtered out).</em></p>
-                </div>
-                '''
-    
-    table_html = _generate_cue_type_table(human_approved_results) if include_table else ""
-    return f'''
-                <div class="subset-section">
-                    <h3>Human-Approved Cues Only</h3>
-                    <p><em>Only includes cues that have been explicitly approved by human review.</em></p>
-                    <div class="plot">
-                        <img src="{human_approved_plots[plot_type]}" alt="Human Approved - Predictiveness by {plot_type.replace('_', ' ').title()}">
-                    </div>
-                    {table_html}
-                </div>
-                '''
 
 
 # ============================================================================
 # HTML GENERATION: Report creation
 # ============================================================================
 
-def generate_html_report_combined(run_id: str, 
-                                 all_results: Dict[str, AnalysisResults],
-                                 model_filtered_results: Dict[str, AnalysisResults],
-                                 human_approved_results: Dict[str, AnalysisResults],
-                                 combined_plots: Dict[str, str]) -> str:
+def generate_html_report(run_id: str, 
+                        data_categories: Dict[str, Dict[str, AnalysisResults]],
+                        plots: Dict[str, str]) -> str:
     """Generate self-contained HTML report with combined visualizations."""
+    
+    # Get info from first category (all should have same basic structure)
+    all_results = data_categories.get('all', {})
+    model_filtered_results = data_categories.get('model_filtered', {})
+    human_approved_results = data_categories.get('human_approved', {})
+    
+    all_models = set()
+    for category_results in data_categories.values():
+        all_models.update(category_results.keys())
     
     # CSS styling
     css = """
@@ -639,45 +385,44 @@ def generate_html_report_combined(run_id: str,
         <div class="container">
             <h1>Predictiveness of Cue Direction Analysis</h1>
             <p><strong>Run ID:</strong> {run_id}</p>
-            <p><strong>Models analyzed:</strong> {', '.join(all_results.keys())}</p>
-            <p><strong>Refusals:</strong> {', '.join([f"{model}: {results.refusal_count}" for model, results in all_results.items()])}</p>
+            <p><strong>Models analyzed:</strong> {', '.join(sorted(all_models))}</p>
             
             <div class="legend-explanation">
                 <h4>Figure Legend</h4>
                 <p>Each figure combines three data filtering approaches:</p>
                 <ul>
                     <li><strong>All:</strong> Complete dataset without filtering</li>
-                    <li><strong>Human:</strong> Only cues explicitly approved by human review</li>
-                    <li><strong>Self:</strong> Only cues the answering model voted as fair</li>
+                    <li><strong>Human Approved:</strong> Only cues explicitly approved by human review</li>
+                    <li><strong>Model Filtered:</strong> Only cues the answering model voted as fair</li>
                 </ul>
             </div>
             
             <div class="metric-section">
                 <h1>1. Predictiveness by Cue Type</h1>
                 <div class="plot">
-                    <img src="{combined_plots['cue_type']}" alt="Combined - Predictiveness by Cue Type">
+                    <img src="{plots['cue_type']}" alt="Predictiveness by Cue Type">
                 </div>
-                {_generate_combined_cue_type_table(all_results, model_filtered_results, human_approved_results)}
+                {_generate_combined_cue_type_table(all_results, model_filtered_results, human_approved_results) if all_results else ''}
             </div>
             
             <div class="metric-section">
                 <h1>2. Predictiveness by Cue Severity</h1>
                 <div class="plot">
-                    <img src="{combined_plots['severity']}" alt="Combined - Predictiveness by Cue Severity">
+                    <img src="{plots['severity']}" alt="Predictiveness by Cue Severity">
                 </div>
             </div>
             
             <div class="metric-section">
                 <h1>3. Predictiveness by Baseline Consistency</h1>
                 <div class="plot">
-                    <img src="{combined_plots['consistency']}" alt="Combined - Predictiveness by Baseline Consistency">
+                    <img src="{plots['consistency']}" alt="Predictiveness by Baseline Consistency">
                 </div>
             </div>
             
             <div class="metric-section">
                 <h1>4. Predictiveness by Question Obviousness</h1>
                 <div class="plot">
-                    <img src="{combined_plots['obviousness']}" alt="Combined - Predictiveness by Question Obviousness">
+                    <img src="{plots['obviousness']}" alt="Predictiveness by Question Obviousness">
                 </div>
             </div>
             
@@ -691,186 +436,6 @@ def generate_html_report_combined(run_id: str,
     return html
 
 
-def generate_html_report(run_id: str, all_results: Dict[str, AnalysisResults], 
-                        plots: Dict[str, str], 
-                        model_filtered_results: Dict[str, AnalysisResults],
-                        model_filtered_plots: Dict[str, str],
-                        majority_filtered_results: Dict[str, AnalysisResults],
-                        majority_filtered_plots: Dict[str, str],
-                        human_approved_results: Dict[str, AnalysisResults] = None,
-                        human_approved_plots: Dict[str, str] = None) -> str:
-    """Generate self-contained HTML report."""
-    
-    # CSS styling
-    css = """
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; background-color: #f5f5f5; }
-        h1 { color: #333; }
-        h2 { color: #555; margin-top: 30px; }
-        h3 { color: #666; margin-top: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; background-color: white; padding: 30px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        table { border-collapse: collapse; width: 100%; margin: 20px 0; }
-        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
-        th { background-color: #f2f2f2; font-weight: bold; }
-        .plot { margin: 20px 0; text-align: center; }
-        img { max-width: 100%; height: auto; }
-        .metric-section { margin: 40px 0; border-top: 2px solid #eee; padding-top: 20px; }
-        .subset-section { margin: 30px 0; }
-    </style>
-    """
-    
-    # Build HTML
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Predictiveness Analysis - {run_id}</title>
-        {css}
-    </head>
-    <body>
-        <div class="container">
-            <h1>Predictiveness of Cue Direction Analysis</h1>
-            <p><strong>Run ID:</strong> {run_id}</p>
-            <p><strong>Models analyzed:</strong> {', '.join(all_results.keys())}</p>
-            <p><strong>Refusals:</strong> {', '.join([f"{model}: {results.refusal_count}" for model, results in all_results.items()])}</p>
-            
-            <div class="metric-section">
-                <h1>1. Predictiveness by Cue Type</h1>
-                
-                <div class="subset-section">
-                    <h3>All Data</h3>
-                    <div class="plot">
-                        <img src="{plots['cue_type']}" alt="All Data - Predictiveness by Cue Type">
-                    </div>
-                    {_generate_cue_type_table(all_results)}
-                </div>
-                
-                {_generate_human_approved_section('cue_type', human_approved_results, human_approved_plots, include_table=True)}
-                
-                <div class="subset-section">
-                    <h3>Model Self-Filtered (Cues voted fair by answering model)</h3>
-                    <p><em>Only includes records where the answering model voted the cue as fair (unfairness==False unanimously for that cue_id).</em></p>
-                    {"<p><em>No data available (all records filtered out).</em></p>" if not model_filtered_plots or 'cue_type' not in model_filtered_plots else f'''
-                    <div class="plot">
-                        <img src="{model_filtered_plots['cue_type']}" alt="Model Filtered - Predictiveness by Cue Type">
-                    </div>
-                    {_generate_cue_type_table(model_filtered_results)}
-                    '''}
-                </div>
-                
-                <div class="subset-section">
-                    <h3>Majority Consensus Filtered (>={int(MAJORITY_THRESHOLD*100)}% of models voted cue fair)</h3>
-                    <p><em>Only includes records where {int(MAJORITY_THRESHOLD*100)}% or more of models voted the cue_id as fair.</em></p>
-                    {"<p><em>No data available (all records filtered out).</em></p>" if not majority_filtered_plots or 'cue_type' not in majority_filtered_plots else f'''
-                    <div class="plot">
-                        <img src="{majority_filtered_plots['cue_type']}" alt="Majority Filtered - Predictiveness by Cue Type">
-                    </div>
-                    {_generate_cue_type_table(majority_filtered_results)}
-                    '''}
-                </div>
-            </div>
-            
-            <div class="metric-section">
-                <h1>2. Predictiveness by Cue Severity</h1>
-                
-                <div class="subset-section">
-                    <h3>All Data</h3>
-                    <div class="plot">
-                        <img src="{plots['severity']}" alt="All Data - Predictiveness by Cue Severity">
-                    </div>
-                </div>
-                
-                {_generate_human_approved_section('severity', human_approved_results, human_approved_plots)}
-                
-                <div class="subset-section">
-                    <h3>Model Self-Filtered</h3>
-                    {"<p><em>No data available (all records filtered out).</em></p>" if not model_filtered_plots or 'severity' not in model_filtered_plots else f'''
-                    <div class="plot">
-                        <img src="{model_filtered_plots['severity']}" alt="Model Filtered - Predictiveness by Cue Severity">
-                    </div>
-                    '''}
-                </div>
-                
-                <div class="subset-section">
-                    <h3>Majority Consensus Filtered</h3>
-                    {"<p><em>No data available (all records filtered out).</em></p>" if not majority_filtered_plots or 'severity' not in majority_filtered_plots else f'''
-                    <div class="plot">
-                        <img src="{majority_filtered_plots['severity']}" alt="Majority Filtered - Predictiveness by Cue Severity">
-                    </div>
-                    '''}
-                </div>
-            </div>
-            
-            <div class="metric-section">
-                <h1>3. Predictiveness by Baseline Consistency</h1>
-                
-                <div class="subset-section">
-                    <h3>All Data</h3>
-                    <div class="plot">
-                        <img src="{plots['consistency']}" alt="All Data - Predictiveness by Baseline Consistency">
-                    </div>
-                </div>
-                
-                {_generate_human_approved_section('consistency', human_approved_results, human_approved_plots)}
-                
-                <div class="subset-section">
-                    <h3>Model Self-Filtered</h3>
-                    {"<p><em>No data available (all records filtered out).</em></p>" if not model_filtered_plots or 'consistency' not in model_filtered_plots else f'''
-                    <div class="plot">
-                        <img src="{model_filtered_plots['consistency']}" alt="Model Filtered - Predictiveness by Baseline Consistency">
-                    </div>
-                    '''}
-                </div>
-                
-                <div class="subset-section">
-                    <h3>Majority Consensus Filtered</h3>
-                    {"<p><em>No data available (all records filtered out).</em></p>" if not majority_filtered_plots or 'consistency' not in majority_filtered_plots else f'''
-                    <div class="plot">
-                        <img src="{majority_filtered_plots['consistency']}" alt="Majority Filtered - Predictiveness by Baseline Consistency">
-                    </div>
-                    '''}
-                </div>
-            </div>
-            
-            <div class="metric-section">
-                <h1>4. Predictiveness by Question Obviousness</h1>
-                
-                <div class="subset-section">
-                    <h3>All Data</h3>
-                    <div class="plot">
-                        <img src="{plots['obviousness']}" alt="All Data - Predictiveness by Question Obviousness">
-                    </div>
-                </div>
-                
-                {_generate_human_approved_section('obviousness', human_approved_results, human_approved_plots)}
-                
-                <div class="subset-section">
-                    <h3>Model Self-Filtered</h3>
-                    {"<p><em>No data available (all records filtered out).</em></p>" if not model_filtered_plots or 'obviousness' not in model_filtered_plots else f'''
-                    <div class="plot">
-                        <img src="{model_filtered_plots['obviousness']}" alt="Model Filtered - Predictiveness by Question Obviousness">
-                    </div>
-                    '''}
-                </div>
-                
-                <div class="subset-section">
-                    <h3>Majority Consensus Filtered</h3>
-                    {"<p><em>No data available (all records filtered out).</em></p>" if not majority_filtered_plots or 'obviousness' not in majority_filtered_plots else f'''
-                    <div class="plot">
-                        <img src="{majority_filtered_plots['obviousness']}" alt="Majority Filtered - Predictiveness by Question Obviousness">
-                    </div>
-                    '''}
-                </div>
-            </div>
-            
-            <hr>
-            <p><em>Statistical significance: * p<0.05, ** p<0.01, *** p<0.001</em></p>
-        </div>
-    </body>
-    </html>
-    """
-    
-    return html
 
 
 
@@ -966,42 +531,6 @@ def _generate_combined_cue_type_table(all_results: Dict[str, AnalysisResults],
     return html
 
 
-def _generate_cue_type_table(all_results: Dict[str, AnalysisResults]) -> str:
-    """Generate HTML table for cue type data."""
-    html = """
-                <table>
-                    <tr>
-                        <th>Model</th>
-                        <th>Cue Type</th>
-                        <th>Predictiveness</th>
-                        <th>N</th>
-                        <th>p-value</th>
-                    </tr>
-    """
-    
-    sorted_models = sort_model_list(list(all_results.keys()))
-    
-    for model in sorted_models:
-        results = all_results[model]
-        
-        for cue_type in CUE_TYPE_ORDER:
-            if cue_type in results.predictiveness_by_cue_type:
-                data = results.predictiveness_by_cue_type[cue_type]
-                sig_marker = _get_significance_marker(data["p_value"])
-                html += f"""
-                        <tr>
-                            <td>{model}</td>
-                            <td>{cue_type}</td>
-                            <td>{data['predictiveness']:.3f}{sig_marker}</td>
-                            <td>{data['n']}</td>
-                            <td>{data['p_value']:.4f}</td>
-                        </tr>
-                """
-    
-    html += """
-                </table>
-    """
-    return html
 
 
 # ============================================================================
@@ -1062,35 +591,20 @@ def main():
     # Generate combined plots
     print("\nGenerating combined visualizations...")
     
-    # Sort models and get colors
-    sorted_models = sort_model_list(list(all_analysis_results.keys()))
-    colors = sns.color_palette("husl", len(sorted_models))
+    # Prepare data dictionary for combined plots
+    combined_data = {
+        'all': all_analysis_results,
+        'human_approved': human_approved_results,
+        'model_filtered': model_filtered_results
+    }
     
-    if all_analysis_results:
-        random = _get_random(all_analysis_results)
-        
-        # Prepare data dictionary for combined plots
-        combined_data = {
-            'all': all_analysis_results,
-            'human_approved': human_approved_results,
-            'model_filtered': model_filtered_results
-        }
-        
-        # Generate combined plots
-        combined_plots = {
-            'cue_type': _plot_cue_type_combined(combined_data, sorted_models, colors, random),
-            'severity': _plot_severity_combined(combined_data, sorted_models, colors, random),
-            'consistency': _plot_consistency_combined(combined_data, sorted_models, colors, random),
-            'obviousness': _plot_obviousness_combined(combined_data, sorted_models, colors, random)
-        }
+    # Generate plots
+    combined_plots = generate_plots(combined_data) if all_analysis_results else {}
     
-    # Generate HTML report with combined plots
+    # Generate HTML report
     print("\nGenerating HTML report...")
-    html_content = generate_html_report_combined(
-        run_id, all_analysis_results, 
-        model_filtered_results,
-        human_approved_results,
-        combined_plots
+    html_content = generate_html_report(
+        run_id, combined_data, combined_plots
     )
     
     # Save report
